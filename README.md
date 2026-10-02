@@ -21,8 +21,6 @@ This is an experimental Windows GUI replacement for the Cooler Master HAF 700 EV
 
 On a fresh installation the application starts inert. Saved preferences can explicitly enable automatic connection and LHM startup on later launches. Disconnect and normal exit remove only the HAF-specific local forward. Reboot requires separate confirmation and targets only the fixed HAF serial. The application does not flash firmware, install/modify an APK, access NAND, start MasterPlus, or target another ADB serial.
 
-`avatar small.jpg` is the source artwork and `haf_iris.ico` is the multi-resolution Windows icon. They use the V2/STW emblem under its stated good-faith, non-commercial conditions and are not MPL-licensed; see `ASSET_NOTICE.md`.
-
 ## Run
 
 Requirements:
@@ -46,8 +44,6 @@ python .\app.py
 <img width="1452" height="965" alt="image" src="https://github.com/user-attachments/assets/6f316dbf-dfb1-427b-998d-6b434f7e81a5" />
 
 <img width="1452" height="960" alt="image" src="https://github.com/user-attachments/assets/d0dedf8a-e8ce-4190-ad60-cc44916e0e4c" />
-
-
 
 Install the small GUI dependencies when needed with:
 
