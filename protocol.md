@@ -2,7 +2,7 @@
 
 Last updated: 2026-10-02
 
-This document is the standalone wire-protocol reference derived from the stock Android APK, passive/live-device inspection, captured MasterPlus state, and physically observed tests. `report.md` remains the chronological investigation log; this file describes the current consolidated understanding.
+This document is the standalone wire-protocol reference derived from the stock Android APK, passive/live-device inspection, captured MasterPlus state, and physically observed tests. It describes the current consolidated understanding.
 
 ## Scope and confidence labels
 
@@ -309,5 +309,4 @@ Before reboot, the GUI removes only its own `tcp:18888` forward. Physical recove
 - CPU sensor selection: `APP/cpu_sensors.py`
 - Decompiled APK: `analysis/jadx/`
 - Protocol utilities and captures: `analysis/protocol/` and `analysis/telemetry_captures/`
-- Chronological evidence: `report.md`
 - Running task status: `checklist.md`
