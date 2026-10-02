@@ -2,9 +2,9 @@ __pycache__/
 *.py[cod]
 logs/
 settings.json
+dist/
 sensor_helper/obj/
 sensor_helper/build_check/
 *.user
 *.suo
 .vs/
-

@@ -43,6 +43,7 @@ from windows_cpu_counters import read_once as read_windows_cpu_counters
 from windows_startup import is_enabled as startup_is_enabled, set_enabled as set_startup_enabled
 from tray_controller import TrayController, available as tray_available
 from log_housekeeping import cleanup_candidates, remove_candidates
+from version import __version__
 
 FREQUENCY_MODE = "CPU frequency"
 GPU_FREQUENCY_MODE = "GPU frequency"
@@ -78,7 +79,7 @@ MODE_CONFIGS = {
 class HafApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("HAF 700 EVO Iris Control")
+        self.title(f"HAF 700 EVO Iris Control v{__version__}")
         # Seven live cards and the evidence log fit comfortably on the 1080p
         # development display at this size without forcing tiny fonts.
         self.geometry("1450x930")

@@ -1,5 +1,7 @@
 # HAF 700 EVO Iris experimental controller
 
+Current version: **v0.0.1**
+
 This is an experimental Windows GUI replacement for the Cooler Master HAF 700 EVO Iris display control path. It implements behavior recovered from the stock Android application and physically tested on the development unit:
 
 - fixed ADB target `1234567890ABCDEF`;
@@ -26,10 +28,14 @@ On a fresh installation the application starts inert. Saved preferences can expl
 Requirements:
 
 - Windows 10/11 x64;
-- Python 3 with Tkinter;
-- .NET 8 Desktop/Runtime for the included sensor helper;
-- Android Platform Tools with `adb.exe` on `PATH`;
+- [Python 3 for Windows](https://www.python.org/downloads/windows/) with Tkinter;
+- [Microsoft .NET 8 Runtime for Windows x64](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) for the included sensor helper;
+- [Android SDK Platform-Tools for Windows](https://developer.android.com/tools/releases/platform-tools), with `adb.exe` available on `PATH`;
 - the Python packages listed in `requirements.txt`.
+
+The initial `v0.0.1` ZIP is a source/runtime package and does not bundle
+Python, .NET, or Android Platform-Tools. Install those prerequisites before
+launching the application.
 
 For a completely console-free launch, double-click `run_app.vbs`. `run_app.bat` also starts the GUI through `pythonw.exe`, although Windows may show the batch console for a fraction of a second. Use `run_app_debug.bat` only when a hidden startup error needs to be seen.
 
@@ -82,6 +88,19 @@ dotnet build .\sensor_helper\HafCpuSensors.csproj -c Release
 ```
 
 See `protocol.md` for the recovered wire protocol and evidence boundaries. Third-party licenses and credits are in `THIRD_PARTY_NOTICES.md` and `licenses/`.
+
+## Versioning and packaged releases
+
+`version.py` is the authoritative application version. The same version is
+shown in the application title bar and recorded in the sensor helper project.
+Release tags use the matching `vMAJOR.MINOR.PATCH` form, beginning with
+`v0.0.1`.
+
+The GitHub Actions workflow validates that the tag and source version match,
+builds the helper, checks the Python source, creates a versioned Windows x64
+ZIP, generates `SHA256SUMS.txt` for that ZIP, and attaches both files to the
+corresponding GitHub Release. Checksums belong to packaged release artifacts;
+the source repository does not maintain a per-file checksum manifest.
 
 ## License and project status
 

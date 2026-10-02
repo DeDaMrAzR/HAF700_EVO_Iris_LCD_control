@@ -1,0 +1,128 @@
+name: Build and package
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-package:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Read and validate version
+        id: version
+        shell: pwsh
+        run: |
+          $version = python -c "from version import __version__; print(__version__)"
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "version.py does not contain a semantic version: $version"
+          }
+
+          $project = [xml](Get-Content sensor_helper/HafCpuSensors.csproj)
+          $helperVersion = $project.Project.PropertyGroup.Version
+          if ($helperVersion -ne $version) {
+            throw "Helper version $helperVersion does not match application version $version"
+          }
+
+          if ($env:GITHUB_REF -like 'refs/tags/*') {
+            $expectedTag = "v$version"
+            if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+              throw "Tag $env:GITHUB_REF_NAME does not match source version $expectedTag"
+            }
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Check Python source
+        shell: pwsh
+        run: |
+          $sources = git ls-files '*.py'
+          python -m py_compile $sources
+
+      - name: Build sensor helper
+        run: dotnet build sensor_helper/HafCpuSensors.csproj -c Release
+
+      - name: Assemble versioned ZIP
+        id: package
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $folderName = "HAF700_EVO_Iris_LCD_control-v$version-win-x64"
+          $dist = Join-Path $PWD 'dist'
+          $packageRoot = Join-Path $dist $folderName
+          New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+
+          # Start from tracked files so local settings, logs, caches, and build
+          # intermediates can never leak into a release package.
+          $tracked = git ls-files | Where-Object {
+            $_ -notlike '.github/*' -and $_ -ne '.gitignore'
+          }
+          foreach ($relative in $tracked) {
+            $destination = Join-Path $packageRoot $relative
+            $parent = Split-Path -Parent $destination
+            if ($parent) {
+              New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            }
+            Copy-Item -LiteralPath $relative -Destination $destination -Force
+          }
+
+          # Use the helper produced by this CI run rather than trusting an old
+          # committed binary. Its framework/runtime dependencies stay beside it.
+          $helperOutput = Join-Path $PWD 'sensor_helper/bin/Release/net8.0'
+          $packagedHelper = Join-Path $packageRoot 'sensor_helper/bin/Release/net8.0'
+          Copy-Item -LiteralPath (Join-Path $helperOutput 'HafCpuSensors.dll') -Destination $packagedHelper -Force
+          Copy-Item -LiteralPath (Join-Path $helperOutput 'HafCpuSensors.deps.json') -Destination $packagedHelper -Force
+          Copy-Item -LiteralPath (Join-Path $helperOutput 'HafCpuSensors.runtimeconfig.json') -Destination $packagedHelper -Force
+
+          $zipName = "$folderName.zip"
+          $zipPath = Join-Path $dist $zipName
+          Compress-Archive -LiteralPath $packageRoot -DestinationPath $zipPath -CompressionLevel Optimal
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $zipName" | Set-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt') -Encoding ascii
+
+          "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
+          "checksum_path=$(Join-Path $dist 'SHA256SUMS.txt')" >> $env:GITHUB_OUTPUT
+          "artifact_name=$folderName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload CI package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: |
+            ${{ steps.package.outputs.zip_path }}
+            ${{ steps.package.outputs.checksum_path }}
+          if-no-files-found: error
+
+      - name: Publish tagged GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            '${{ steps.package.outputs.zip_path }}' `
+            '${{ steps.package.outputs.checksum_path }}' `
+            --verify-tag `
+            --title "HAF 700 EVO Iris LCD Control $env:GITHUB_REF_NAME" `
+            --generate-notes
