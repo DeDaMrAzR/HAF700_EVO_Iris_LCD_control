@@ -1,6 +1,6 @@
 # HAF 700 EVO Iris protocol notes
 
-Last updated: 2026-10-02
+Last updated: 2026-10-03
 
 This document is the standalone wire-protocol reference derived from the stock Android APK, passive/live-device inspection, captured MasterPlus state, and physically observed tests. It describes the current consolidated understanding.
 
@@ -11,7 +11,7 @@ This document is the standalone wire-protocol reference derived from the stock A
 - **Physically confirmed** means the user observed the expected result on the LCD.
 - **Unresolved** means a plausible field or behavior still lacks enough evidence.
 
-The fixed investigated unit has ADB serial `1234567890ABCDEF`. The unrelated Android serial `R52N201MZPD` is outside this project's scope.
+The supported controller uses ADB serial `1234567890ABCDEF`.
 
 ## Transport
 
@@ -31,7 +31,11 @@ This is operationally important:
 - Live response command `0x15` does not return the same ACK and must not wait for one.
 - Consecutive `0x15` updates should reuse one TCP connection.
 
-Opening a new TCP connection for every live frame caused missed physical presentations even though sends completed and the Android state eventually matched. A five-value test over one persistent connection sent 1.11, 2.22, 3.33, 4.44, and 5.55 GHz; `currentType`, the Android UI tree, and the physical LCD all matched all five. The GUI therefore keeps one live socket until Stop, disconnect, reboot, reconnect, application exit, socket failure, or an ACK-bearing command requires an isolated transaction.
+Live frames require a persistent connection for reliable physical presentation.
+The application keeps one live socket until Stop, disconnect, reboot, reconnect,
+application exit, socket failure, or an ACK-bearing command requires an isolated
+transaction. A persistent-connection validation sequence at 1.11, 2.22, 3.33,
+4.44, and 5.55 GHz matched in `currentType`, the UI tree, and the physical LCD.
 
 ## General frame
 
@@ -93,7 +97,8 @@ The replacement app's normal 24-byte body uses:
 [00]                # empty media name
 ```
 
-The earlier theory that `03` was a text length was wrong. Source parsing and byte enumeration confirm it is the background state following a zero-length text field.
+Source parsing and byte enumeration identify `03` as the background state after
+the zero-length text field.
 
 ## Display commands
 
@@ -112,22 +117,24 @@ The earlier theory that `03` was a text length was wrong. Source parsing and byt
 - Works best over one persistent connection.
 - The stock APK still writes the accepted frame to shared-preference key `currentType`.
 
-An early live implementation incorrectly waited three seconds for a `0x12`-style ACK after every `0x15`. The LCD changed, but every iteration logged `timed out`. The timeout was host logic, not device rejection.
+Waiting for a `0x12`-style ACK after `0x15` produces a host-side timeout even
+though the LCD update may be accepted. This timeout must not be interpreted as
+device rejection.
 
 ## Numeric mode IDs
 
 All modes exposed below have been physically confirmed to render and respond to manual value changes:
 
-| Mode | Display meaning | Confirmed manual range used by the app | Automatic live source status |
+| Mode | Display meaning | Accepted app range | Automatic live source |
 | ---: | --- | ---: | --- |
 | 1 | CPU frequency | 0–9990 MHz | Confirmed: LHM load-weighted physical-core clock |
-| 2 | GPU frequency | 0–6000 MHz | Implemented: LHM GPU Core `/gpu-nvidia/0/clock/0`; physical live-cycle confirmation pending |
+| 2 | GPU frequency | 0–6000 MHz | Confirmed: LHM GPU Core `/gpu-nvidia/0/clock/0` |
 | 3 | CPU temperature | -20–150 °C configured; -10 and 120 °C physically shown | Confirmed: LHM CPU Package |
-| 4 | GPU temperature | 0–100 °C | Implemented: LHM GPU Core `/gpu-nvidia/0/temperature/0`; physical live-cycle confirmation pending |
+| 4 | GPU temperature | 0–100 °C | Confirmed: LHM GPU Core `/gpu-nvidia/0/temperature/0` |
 | 5 | CPU usage | 0–100% | Confirmed: LHM CPU Total |
-| 6 | GPU usage | 0–100% | Implemented: LHM GPU Core `/gpu-nvidia/0/load/0`; physical live-cycle confirmation pending |
-| 7 | RAM usage | 0–100% | Implemented: Win32 physical-memory load; physical live-cycle confirmation pending |
-| 8 | CPU fan | 0–10000 RPM | Implemented and physically confirmed: prefer an LHM CPU-labelled motherboard fan, otherwise only the sole active non-GPU fan. Development host resolves `ITE IT8689E` `Fan #2` `/lpc/it8689e/0/fan/1` |
+| 6 | GPU usage | 0–100% | Confirmed: LHM GPU Core `/gpu-nvidia/0/load/0` |
+| 7 | RAM usage | 0–100% | Confirmed: Win32 physical-memory load |
+| 8 | CPU fan | 0–10000 RPM | Implemented and physically confirmed: prefer an LHM CPU-labelled motherboard fan, otherwise only the sole active non-GPU fan |
 | 9 | Case fan 1 | 0–10000 RPM | Sensor mapping pending |
 | 10 | Case fan 2 | 0–10000 RPM | Sensor mapping pending |
 | 11 | Case fan 3 | 0–10000 RPM | Sensor mapping pending |
@@ -208,7 +215,7 @@ Confirmed consequences:
 
 - Temperature with 40/80 °C thresholds visibly changes between slow, medium, and fast bands.
 - CPU frequency with stock 1100/6000 MHz thresholds normally remains in the middle band, so changing frequency does not produce proportional ring speed.
-- Sending experimental 2000/4500 thresholds was present in the exact acknowledged frames but did not visibly produce the expected CPU-frequency band changes. That path was removed from the normal GUI.
+- Alternate CPU-frequency thresholds have not produced reliable physical band changes and are not used by the normal GUI.
 - Modes 5–7 use bitmap gauges rather than the rotating ring behavior.
 
 Continuous proportional ring motion cannot be produced by merely changing the numeric value in the stock renderer. It would require changing bounds dynamically in a way the renderer actually honors, or modifying/replacing the Android renderer.
@@ -279,69 +286,18 @@ adb -s 1234567890ABCDEF reboot
 
 Before reboot, the GUI removes only its own `tcp:18888` forward. Physical recovery from a backlight-only state was confirmed, but Android/LCD startup is unusually slow—approximately two minutes was observed in one logged GUI cycle.
 
-## Genuine transition videos and the corrected trigger attribution
+## Stock transition videos and LCD power sequence
 
-The stock APK contains `res/raw/shutdown.mp4` and `res/raw/start.mp4`, but its
-Volume-key playback path is unreliable. Decompiled `MediaView` starts IJK
-playback before `SplashActivity` attaches the video view. Device logs repeatedly
-show `Video: first frame decoded`, then `NULL native_window`, and only afterward
-surface attachment. Pausing telemetry removes competing view replacements but
-does not eliminate this ordering race.
-
-The unmodified device includes an MP4-capable system activity:
-
-```text
-com.android.gallery3d/.app.MovieActivity
-```
-
-An unchanged asset can be staged temporarily and launched without modifying
-the APK or firmware:
-
-```powershell
-adb -s 1234567890ABCDEF shell mkdir -p /data/local/tmp/haf_transition_test
-adb -s 1234567890ABCDEF push shutdown.mp4 /data/local/tmp/haf_transition_test/shutdown.mp4
-adb -s 1234567890ABCDEF shell chmod 644 /data/local/tmp/haf_transition_test/shutdown.mp4
-adb -s 1234567890ABCDEF shell am start -a android.intent.action.VIEW -d file:///data/local/tmp/haf_transition_test/shutdown.mp4 -t video/mp4 -n com.android.gallery3d/.app.MovieActivity
-```
-
-Use the corresponding path and filename for `start.mp4`. Do not use
-`am start -W` as proof of playback: it can report `Status: timeout` despite
-launching MovieActivity. Verify hashes, focus, decoder logs, and the physical
-LCD independently.
+The stock APK contains `res/raw/shutdown.mp4` and `res/raw/start.mp4`. Both are
+played through the application's bundled IJK/FFmpeg path. Telemetry and display
+cycling must remain paused while either video owns the LCD surface.
 
 | Asset | SHA-256 | Confirmed result |
 | --- | --- | --- |
-| `shutdown.mp4` | `0a812331a9a49461a4681d2410ee43b291c474dfafd59898f20274b84fc78e5c` | Genuine shutdown animation physically shown after stock Volume Down; it was not played by MovieActivity |
-| `start.mp4` | `b7d154170875d1965799196202e25197a5831c2748e63380ce0a511a2acd098e` | Opens as AVC but fails in the RDA hardware decoder, leaving backlight only |
+| `shutdown.mp4` | `0a812331a9a49461a4681d2410ee43b291c474dfafd59898f20274b84fc78e5c` | Played by the stock Volume-Down path |
+| `start.mp4` | `b7d154170875d1965799196202e25197a5831c2748e63380ce0a511a2acd098e` | Played when the stock `SplashActivity` starts |
 
-Important chronology correction for the one physically successful shutdown
-playback: Gallery was launched only after the stock Volume-Down handler had
-already attempted shutdown playback for 30 seconds from the CM-logo state.
-That preceding attempt kept brightness at 255 and logged `NULL native_window`,
-but it may have primed media or display state. The exact successful sequence
-was:
-
-```powershell
-adb -s 1234567890ABCDEF shell input keyevent 25
-# Wait 30 seconds, then launch shutdown.mp4 through MovieActivity.
-```
-
-The sequence was reproduced from a clean post-reboot CM-logo state. The user
-observed the genuine shutdown animation immediately from the stock Volume-Down
-path. The later Gallery launch then failed in OMX and left only the backlight
-visible. This proves the earlier animation was misattributed to Gallery. Do not
-use Gallery in the shutdown design.
-
-The startup failure was reproduced both from a clean post-reboot CM-logo state
-and immediately after a verified `Asleep -> Awake` transition. In both cases
-the system player reported `OMX-VPU interrupt timeout`, `OMX_EventError`, and
-`MEDIA_ERROR -2147483648`. Therefore being in the off state is not sufficient.
-A possible non-APK next step is to re-encode a derived temporary copy of
-`start.mp4` to codec parameters proven compatible with the working shutdown
-asset, while preserving the original file and hash.
-
-The stock reboot path is different from Gallery and does invoke the startup
-asset successfully through bundled IJK/FFmpeg. A clean boot trace showed:
+The stock startup path invokes the startup asset through bundled IJK/FFmpeg:
 
 1. `SplashActivity.onCreate()` calls `initView()`.
 2. `initView()` calls `mediaView.setVideoRaw(callback, false)`, whose recovered
@@ -351,26 +307,12 @@ asset successfully through bundled IJK/FFmpeg. A clean boot trace showed:
    surface attaches about 250 ms later and playback continues.
 5. `FFP_MSG_COMPLETED` arrives about 27 seconds after playback preparation.
 6. The completion callback parses the persisted `currentType` and restores that
-   display (mode 18 CM logo in the captured run).
+   display (for example, the mode-18 CM logo).
 
-Captured device timeline on 2026-10-03:
-
-```text
-01:19:23.050  IJK prepare/start for bundled start video
-01:19:23.990  first frame decoded; NULL native_window
-01:19:24.240  video surface attached
-01:19:50.790  FFP_MSG_COMPLETED
-01:19:57.260  host ADB connection returned
-```
-
-This explains why an observer connecting after reboot sees only the restored
-logo: the startup video has already finished before ADB becomes available.
-Gallery uses Android's older hardware OMX path instead of the APK's IJK/FFmpeg
-path, which explains why the identical `start.mp4` can complete during stock
-boot yet fail in Gallery with a VPU timeout.
-
-The same successful IJK startup path can be triggered without rebooting Android
-and without modifying the APK:
+The complete playback takes approximately 27 seconds. ADB may become available
+only after the video has completed and the persisted display has returned.
+The same stock startup path can be triggered without rebooting or modifying the
+APK:
 
 ```powershell
 adb -s 1234567890ABCDEF shell am force-stop com.magic.box
@@ -378,20 +320,15 @@ adb -s 1234567890ABCDEF shell am force-stop com.magic.box
 # Use an explicit am start only as a fallback if the process did not return.
 ```
 
-On the clean device this created a fresh `SplashActivity`, invoked `initView()`,
-played the bundled `R.raw.start` through IJK for approximately 27 seconds,
-emitted `FFP_MSG_COMPLETED`, and restored persisted `currentType`. The user
-physically confirmed the genuine startup splash was visible. Because
-`com.magic.box` is the HOME activity, so Android relaunches it immediately after
-`force-stop`. A later live test proved that stacking an explicit `am start` on
-top of that automatic launch can create two `SplashActivity` instances. Both
-call `initSocket()`; the second port-9900 bind fails and OkSocket's catch path
-calls `shutdown()`, removing the valid listener. The correct path is therefore
-force-stop once, wait for automatic HOME restoration, and require port 9900 to
-be listening. Explicit start is only a fallback when no stock process returns.
+`com.magic.box` is the HOME activity, so the system normally recreates
+`SplashActivity` immediately after `force-stop`. Starting a second activity in
+parallel can create two port-9900 bind attempts; the failed bind can shut down
+the valid listener. Force-stop once, wait for automatic HOME restoration, and
+require port 9900 to be listening. Use an explicit activity start only if the
+stock process does not return.
 
-The currently confirmed non-APK transition strategy uses stock application
-paths for both animations:
+The confirmed power sequence uses the stock application paths for both
+animations:
 
 - stop telemetry/cycling, ensure the stock app is in a clean visible state,
   send Volume Down (key 25), and let its delayed IJK shutdown playback finish
@@ -401,44 +338,33 @@ paths for both animations:
 - restore the selected metric and resume telemetry only after the startup
   playback/completion window and a successful protocol readiness check.
 
-The shutdown half has now been physically validated end to end. Starting from
-the stable CM logo with telemetry stopped, send Volume Down (key 25), wait 35
-seconds, and then send Android Power (key 26). In the confirmed run the stock
-player began preparing the shutdown asset about six seconds after the key
-event; the user saw the entire animation finish before Power, after which the
-LCD and backlight were fully off and Android reported
-`mWakefulness=Asleep`. Treat 35 seconds as the currently proven conservative
-delay, not as the exact media duration.
+For shutdown, start from a stable visible screen with telemetry stopped, send
+Volume Down (key 25), wait 35 seconds, and then send Power (key 26). The stock
+player starts preparing the shutdown asset about six seconds after Volume Down.
+The 35-second delay allows the full animation to finish before the panel and
+backlight turn off. The resulting power state is `mWakefulness=Asleep`.
 
-The matching wake half is also physically validated. From the fully off state:
+For startup from the fully off state:
 
 1. Send Android Power (key 26).
 2. Wait three seconds and verify Android is Awake.
-3. Force-stop only `com.magic.box`.
-4. Start `com.magic.box/.ui.SplashActivity`.
-5. Do not send display frames while the startup video is playing.
+3. Force-stop only `com.magic.box` and wait for HOME to recreate
+   `SplashActivity`.
+4. Use an explicit `am start` only if the stock process does not return.
+5. Require port 9900 to be listening and allow the startup video to complete.
+6. Restore the previous display mode and resume telemetry.
 
-The user observed the complete genuine `start.mp4`, followed by the persisted
-CM logo. This establishes the transition sequence itself; a controller must
-still wait for startup completion/readiness before restoring its previous mode
-and resuming telemetry.
+Android `dumpsys power` `mWakefulness` is suitable for control gating: `Awake`
+is displayed as `ON` and permits OFF; `Asleep` is displayed as `OFF` and permits
+ON. This state does not identify the metric or video being rendered.
 
-Android `dumpsys power` `mWakefulness` matches the physically confirmed panel
-power states and is suitable for control gating: internal `Awake` is displayed
-as `ON` and permits OFF; `Asleep` is displayed as `OFF` and permits ON. This state does not describe
-which metric or video is currently rendered.
-
-The panel retains its last framebuffer across Android Power-off. On wake, that
+The panel retains its last framebuffer across Power-off. On wake, that
 retained image may flash briefly before the first `start.mp4` frame reaches the
-surface. This is a confirmed cosmetic artifact, not an early telemetry send;
-host TX remained paused throughout the observed flash and startup playback.
+surface. Telemetry remains paused throughout this interval. A backlight-only
+state that does not recover through the stock activity path requires the
+fixed-target reboot documented above.
 
-Gallery handoff can leave the panel backlight-only and the stock HOME activity
-without a focused window. Stopping Gallery and restarting `SplashActivity` did
-not reliably recover that state during testing. The confirmed recovery remains
-the fixed-serial HAF reboot documented above.
-
-## Current sender rules
+## Sender requirements
 
 1. Target only fixed serial `1234567890ABCDEF`.
 2. Forward a dedicated localhost port to device port 9900.
@@ -453,19 +379,16 @@ the fixed-serial HAF reboot documented above.
 
 ## Unresolved or deliberately deferred
 
-- Exact automatic sensor identifiers/semantics for case fans. The development host's mode-8 CPU-fan source and selectable live cycle are physically confirmed; hardware labels may differ on another motherboard.
+- Exact automatic sensor identifiers and semantics for case-fan modes 9–13.
 - Whether a useful stock `0x14 QUERY_MODE_DATA` carousel can be driven entirely on-device without the PC continuously supplying records. The replacement app currently performs deterministic host-side cycling instead.
 - A genuine physical-framebuffer/panel-present acknowledgement path.
 - Why the stock APK sometimes reaches a backlight-only state and why its boot is slow.
-- Whether dynamic bounds can reliably control frequency-ring speed; the tested 2000/4500 substitution did not.
+- Whether alternate dynamic bounds can reliably control frequency-ring speed.
 - Patching or replacing the APK renderer to remove bitmap-heavy animation, repeated `setContentView`, and other UI overhead.
 
-## Workspace implementation references
+## Implementation references
 
-- Frame construction: `APP/haf_protocol.py`
-- TCP/ADB transport and logging: `APP/haf_device.py`
-- GUI/live controller: `APP/app.py`
-- CPU sensor selection: `APP/cpu_sensors.py`
-- Decompiled APK: `analysis/jadx/`
-- Protocol utilities and captures: `analysis/protocol/` and `analysis/telemetry_captures/`
-- Running task status: `checklist.md`
+- Frame construction: [`haf_protocol.py`](haf_protocol.py)
+- TCP/ADB transport and logging: [`haf_device.py`](haf_device.py)
+- GUI and live controller: [`app.py`](app.py)
+- Sensor selection: [`cpu_sensors.py`](cpu_sensors.py)
