@@ -255,7 +255,7 @@ These are documented for completeness, not endorsed for experimentation:
 
 | Command | APK name | Recovered behavior |
 | ---: | --- | --- |
-| `10` | `LED_DIRECTION` | Sets the complete LCD orientation in 90° steps and returns `10 80 00 01 00 00` |
+| `10` | `LCD_ORIENTATION` | Sets the complete LCD orientation in 90° steps and returns `10 80 00 01 00 00` |
 | `E0` | `RESET` / duplicated `QUERY_FILE_NAME` | No action in this build |
 | `FC` | `SYNC_TIME` | Sets system time/timezone |
 | `F0` | `QUERY_SPACE` | Returns external-storage geometry |
@@ -276,7 +276,10 @@ These are documented for completeness, not endorsed for experimentation:
 
 File commands are unsafe to probe casually. The recovered code directly concatenates received names beneath app storage without canonical-path validation, validates extension rather than content, and lacks robust length/hash checks. `QUERY_FILE_LIST` can also crash its request path when the directory is empty.
 
-### `0x10` — `LED_DIRECTION`
+### `0x10` — `LCD_ORIENTATION`
+
+The stock APK enum names this command `LED_DIRECTION`; `LCD_ORIENTATION` is used
+here because the command rotates the complete LCD output.
 
 The frame contains a one-byte body:
 
