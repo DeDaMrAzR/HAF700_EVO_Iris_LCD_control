@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,11 @@ TARGET_SERIAL = "1234567890ABCDEF"
 LOCAL_PORT = 18888
 DEVICE_PORT = 9900
 LCD_VALUE_RESOURCE = "com.magic.box:id/base_view_layout_ghzValue"
+STOCK_PACKAGE = "com.magic.box"
+STOCK_ACTIVITY = "com.magic.box/.ui.SplashActivity"
+SHUTDOWN_WAIT_SECONDS = 35.0
+WAKE_STABILIZATION_SECONDS = 3.0
+STARTUP_WAIT_SECONDS = 30.0
 
 
 def timestamp() -> str:
@@ -145,10 +151,23 @@ class HafDevice:
 
     def _run_adb(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         command = [self._adb(), "-s", TARGET_SERIAL, *arguments]
-        return subprocess.run(command, capture_output=True, text=True, timeout=10, check=False)
+        # The normal GUI is launched with pythonw. Hide ADB's console window as
+        # well so multi-step ON/OFF operations do not flash several shells.
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
 
     def connect(self) -> None:
         self._close_live_socket("reconnect")
+        # An ADB forward can be created even when nothing is listening on the
+        # Android side. Check the actual stock server first so "Connected" is
+        # meaningful and frames cannot disappear into a dead forward.
+        self._wait_for_stock_server(3.0)
         result = self._run_adb("forward", f"tcp:{LOCAL_PORT}", f"tcp:{DEVICE_PORT}")
         if result.returncode != 0:
             self.log.write("connect_failed", returncode=result.returncode, stderr=result.stderr.strip())
@@ -199,6 +218,129 @@ class HafDevice:
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "HAF reboot command failed")
+
+    def _send_keyevent(self, keycode: int, step: str) -> None:
+        """Send one Android key only to the fixed HAF serial and record the result."""
+        result = self._run_adb("shell", "input", "keyevent", str(keycode))
+        self.log.write(
+            "power_transition_keyevent",
+            serial=TARGET_SERIAL,
+            step=step,
+            keycode=keycode,
+            returncode=result.returncode,
+            stderr=result.stderr.strip(),
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"Android keyevent {keycode} failed")
+
+    def read_wakefulness(self) -> str:
+        """Return Android's current Awake/Asleep state for GUI gating."""
+        result = self._run_adb("shell", "dumpsys", "power")
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "Could not read Android power state")
+        for line in result.stdout.splitlines():
+            if "mWakefulness=" in line:
+                wakefulness = line.split("mWakefulness=", 1)[1].strip()
+                self.log.write("lcd_power_state_read", serial=TARGET_SERIAL, wakefulness=wakefulness)
+                return wakefulness
+        raise RuntimeError("Android power state did not contain mWakefulness")
+
+    def _stock_process_running(self) -> bool:
+        result = self._run_adb("shell", "pidof", STOCK_PACKAGE)
+        return result.returncode == 0 and bool(result.stdout.strip())
+
+    def _wait_for_stock_server(self, timeout_seconds: float = 10.0) -> None:
+        """Wait until the automatically restored HOME app owns port 9900."""
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            result = self._run_adb("shell", "netstat", "-an")
+            if result.returncode == 0 and any(
+                ":9900" in line and "LISTEN" in line for line in result.stdout.splitlines()
+            ):
+                self.log.write("stock_server_ready", serial=TARGET_SERIAL, port=DEVICE_PORT)
+                return
+            time.sleep(0.5)
+        raise RuntimeError("Stock LCD app did not reopen port 9900 within the readiness window")
+
+    def gentle_power_off(self, shutdown_wait_seconds: float = SHUTDOWN_WAIT_SECONDS) -> str:
+        """Play the stock shutdown animation, then turn the physical LCD off.
+
+        The 35-second delay is deliberately conservative. It is the interval
+        physically proven to let the bundled shutdown video finish before the
+        Power event removes the panel backlight.
+        """
+        self._close_live_socket("gentle_power_off")
+        self.log.write(
+            "gentle_power_off_started",
+            serial=TARGET_SERIAL,
+            shutdown_wait_seconds=shutdown_wait_seconds,
+        )
+        initial_wakefulness = self.read_wakefulness()
+        if initial_wakefulness.lower() == "asleep":
+            self.log.write("gentle_power_off_already_asleep", serial=TARGET_SERIAL)
+            return initial_wakefulness
+        self._send_keyevent(25, "stock_shutdown_video")
+        time.sleep(shutdown_wait_seconds)
+        self._send_keyevent(26, "physical_display_off")
+        time.sleep(1.0)
+        wakefulness = self.read_wakefulness()
+        self.log.write("gentle_power_off_completed", serial=TARGET_SERIAL, wakefulness=wakefulness)
+        if wakefulness.lower() != "asleep":
+            raise RuntimeError(f"LCD power-off was not confirmed; Android is {wakefulness}")
+        return wakefulness
+
+    def gentle_power_on(
+        self,
+        wake_stabilization_seconds: float = WAKE_STABILIZATION_SECONDS,
+        startup_wait_seconds: float = STARTUP_WAIT_SECONDS,
+    ) -> str:
+        """Wake Android and use the stock HOME activity to play start.mp4."""
+        self._close_live_socket("gentle_power_on")
+        self.log.write(
+            "gentle_power_on_started",
+            serial=TARGET_SERIAL,
+            wake_stabilization_seconds=wake_stabilization_seconds,
+            startup_wait_seconds=startup_wait_seconds,
+        )
+        wakefulness = self.read_wakefulness()
+        if wakefulness.lower() != "awake":
+            self._send_keyevent(26, "physical_display_on")
+            time.sleep(wake_stabilization_seconds)
+            wakefulness = self.read_wakefulness()
+        if wakefulness.lower() != "awake":
+            raise RuntimeError(f"LCD wake was not confirmed; Android is {wakefulness}")
+
+        stop_result = self._run_adb("shell", "am", "force-stop", STOCK_PACKAGE)
+        if stop_result.returncode != 0:
+            raise RuntimeError(stop_result.stderr.strip() or "Could not stop the stock LCD app")
+
+        # SplashActivity is the device's HOME activity. Android normally
+        # recreates it automatically after force-stop. Starting it explicitly
+        # at the same time can create a second instance; both call initSocket,
+        # and the failed second bind shuts down the valid port-9900 listener.
+        try:
+            self._wait_for_stock_server()
+            launch_path = "android_home_auto_restore"
+        except RuntimeError:
+            if self._stock_process_running():
+                raise
+            start_result = self._run_adb("shell", "am", "start", "-n", STOCK_ACTIVITY)
+            if start_result.returncode != 0:
+                raise RuntimeError(start_result.stderr.strip() or "Could not start the stock LCD app")
+            self._wait_for_stock_server()
+            launch_path = "explicit_fallback"
+        self.log.write("stock_startup_activity_ready", serial=TARGET_SERIAL, launch_path=launch_path)
+
+        # Do not reopen the protocol socket during this interval: a display
+        # frame can replace the video view before the startup animation ends.
+        time.sleep(startup_wait_seconds)
+        self.log.write(
+            "gentle_power_on_completed",
+            serial=TARGET_SERIAL,
+            wakefulness=wakefulness,
+            stock_server_ready=True,
+        )
+        return wakefulness
 
     def read_lcd_ui(self) -> dict[str, str]:
         """Read the active Android view-tree value; this does not prove physical scanout."""

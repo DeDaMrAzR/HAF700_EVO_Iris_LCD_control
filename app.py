@@ -29,7 +29,14 @@ from cpu_sensors import (
     select_load_weighted_frequency,
     select_memory_load,
 )
-from haf_device import EventLog, HafDevice, TARGET_SERIAL
+from haf_device import (
+    EventLog,
+    HafDevice,
+    SHUTDOWN_WAIT_SECONDS,
+    STARTUP_WAIT_SECONDS,
+    TARGET_SERIAL,
+    WAKE_STABILIZATION_SECONDS,
+)
 from haf_protocol import (
     MAX_MHZ,
     MAX_TEMPERATURE_C,
@@ -131,6 +138,11 @@ class HafApp(tk.Tk):
         # Keep one pending auto-start callback at most. Without this guard a
         # quick reconnect and a preferences save could start two helpers.
         self._auto_lhm_after_id: str | None = None
+        self._power_transition_running = False
+        self._lcd_transmission_paused = threading.Event()
+        self._power_resume_mode: str | None = None
+        self._lcd_power_state: str | None = None
+        self.lcd_power_status = tk.StringVar(value="UNKNOWN")
         self._build_ui()
         self.status.trace_add("write", self._status_changed)
         self._append_activity(self.status.get())
@@ -208,6 +220,31 @@ class HafApp(tk.Tk):
             lines.append(f"Pre-reboot forward cleanup exit {record.get('returncode')}")
         elif event == "reboot_requested":
             lines.append(f"ADB reboot request exit {record.get('returncode')}")
+        elif event == "power_transition_keyevent":
+            lines.append(
+                f"LCD power step: {record.get('step')} key={record.get('keycode')} "
+                f"exit={record.get('returncode')}"
+            )
+        elif event == "gentle_power_off_started":
+            lines.append(
+                f"Gentle LCD OFF started; shutdown wait={record.get('shutdown_wait_seconds')}s"
+            )
+        elif event == "gentle_power_off_completed":
+            lines.append(f"Gentle LCD OFF completed; wakefulness={record.get('wakefulness')}")
+        elif event == "gentle_power_on_started":
+            lines.append(
+                "Gentle LCD ON started; "
+                f"wake wait={record.get('wake_stabilization_seconds')}s, "
+                f"startup wait={record.get('startup_wait_seconds')}s"
+            )
+        elif event == "stock_server_ready":
+            lines.append(f"Stock LCD protocol server ready on port {record.get('port')}")
+        elif event == "stock_startup_activity_ready":
+            lines.append(f"Stock startup path ready: {record.get('launch_path')}")
+        elif event == "gentle_power_on_completed":
+            lines.append(f"Gentle LCD ON completed; wakefulness={record.get('wakefulness')}")
+        elif event == "lcd_power_state_read":
+            lines.append(f"LCD power state: {record.get('wakefulness')}")
         elif event.endswith("failed"):
             lines.append(f"{event}: {record.get('stderr') or record.get('error') or 'unknown error'}")
 
@@ -331,7 +368,6 @@ class HafApp(tk.Tk):
                 length=145,
             ).pack(fill="x", pady=(5, 4))
             ttk.Label(card, textvariable=self.metric_range_vars[metric_mode]).pack(anchor="w")
-            ttk.Label(card, text=f"Graph 0–{maximum:g}{unit}", style="Subtitle.TLabel").pack(anchor="w")
             dashboard.columnconfigure(column, weight=1)
         controls_row = 2
         ttk.Button(dashboard, text="Reset min/max", command=self._reset_metric_extrema).grid(
@@ -381,6 +417,19 @@ class HafApp(tk.Tk):
             advanced, text="Reboot LCD...", command=self._reboot, state="disabled"
         )
         self.reboot_button.grid(row=0, column=2, sticky="e")
+        power_buttons = ttk.Frame(advanced)
+        power_buttons.grid(row=0, column=1, padx=(12, 12), sticky="e")
+        ttk.Label(power_buttons, textvariable=self.lcd_power_status, style="Subtitle.TLabel").pack(
+            side="left", padx=(0, 8)
+        )
+        self.lcd_on_button = ttk.Button(
+            power_buttons, text="LCD ON", command=self._gentle_power_on, state="disabled"
+        )
+        self.lcd_on_button.pack(side="left")
+        self.lcd_off_button = ttk.Button(
+            power_buttons, text="LCD OFF", command=self._gentle_power_off, state="disabled"
+        )
+        self.lcd_off_button.pack(side="left", padx=(8, 0))
         ttk.Label(advanced, text="Read active Android LCD value").grid(
             row=1, column=0, sticky="w", pady=(10, 0)
         )
@@ -442,6 +491,10 @@ class HafApp(tk.Tk):
         self.connect_button.configure(state="disabled" if connected else "normal")
         self.disconnect_button.configure(state="normal" if connected else "disabled")
         self.reboot_button.configure(state="normal" if connected else "disabled")
+        if not connected:
+            self._update_lcd_power_state(None)
+        else:
+            self._refresh_power_button_states()
         self.read_lcd_ui_button.configure(state="normal" if connected else "disabled")
         self.apply_button.configure(state="normal" if connected else "disabled")
         self.lhm_start_button.configure(
@@ -639,6 +692,21 @@ class HafApp(tk.Tk):
                         f"LHM READ {metric_message}; total_load={sample.get('cpu_total_load_percent')}% "
                         f"helper_cpu={helper_cpu_percent if helper_cpu_percent is not None else '--'}% of one core",
                     )
+                    if self._lcd_transmission_paused.is_set():
+                        # Keep consuming fresh LHM snapshots so the helper does
+                        # not build a stale queue while the stock videos own the
+                        # LCD. The first post-wake send will therefore be fresh.
+                        self.after(
+                            0,
+                            self._append_activity,
+                            f"TX paused for LCD power transition; sampled {live_mode}={expected}",
+                        )
+                        continue
+                    # Disconnect/Stop can occur after this sample entered the
+                    # loop. Recheck immediately before I/O so an expected user
+                    # disconnect does not become a noisy transport error.
+                    if self._lhm_live_stop.is_set() or not self.connected_ui:
+                        break
                     self.device.send(frame, expect_ack=False)
                     self.last_expected_lcd = expected
                     self.after(
@@ -800,6 +868,7 @@ class HafApp(tk.Tk):
         try:
             self.device.connect()
             self._set_connected_ui(True)
+            self._update_lcd_power_state(self.device.read_wakefulness())
             self.status.set(f"Connected to {TARGET_SERIAL} through localhost:18888")
             # This preference belongs to every successful connection, not just
             # the initial application-launch path. That matters when the LCD is
@@ -932,6 +1001,122 @@ class HafApp(tk.Tk):
         except Exception as exc:
             self.status.set(f"Reboot failed: {exc}")
             messagebox.showerror("Reboot failed", str(exc))
+
+    def _set_power_transition_ui(self, running: bool) -> None:
+        """Keep mutually exclusive recovery controls disabled during a transition."""
+        self._power_transition_running = running
+        self._refresh_power_button_states()
+        state = "disabled" if running or not self.connected_ui else "normal"
+        self.reboot_button.configure(state=state)
+        self.apply_button.configure(state=state)
+
+    def _update_lcd_power_state(self, wakefulness: str | None) -> None:
+        """Normalize Android power state and make the valid next action obvious."""
+        normalized = wakefulness.lower() if wakefulness else None
+        self._lcd_power_state = normalized if normalized in ("awake", "asleep") else None
+        label = "ON" if self._lcd_power_state == "awake" else "OFF" if self._lcd_power_state == "asleep" else "UNKNOWN"
+        self.lcd_power_status.set(label)
+        self._refresh_power_button_states()
+
+    def _refresh_power_button_states(self) -> None:
+        can_use = self.connected_ui and not self._power_transition_running
+        self.lcd_on_button.configure(
+            state="normal" if can_use and self._lcd_power_state == "asleep" else "disabled"
+        )
+        self.lcd_off_button.configure(
+            state="normal" if can_use and self._lcd_power_state == "awake" else "disabled"
+        )
+
+    def _gentle_power_off(self) -> None:
+        if self._power_transition_running:
+            return
+        if not messagebox.askyesno(
+            "Turn the HAF LCD off?",
+            "Play the complete stock shutdown animation, then turn off the LCD and backlight?",
+        ):
+            return
+        self._power_resume_mode = self.lhm_live_mode or self.mode.get()
+        self._lcd_transmission_paused.set()
+        self._stop_display_cycle()
+        self.device.close_live_session("gentle_power_off_pause")
+        self._set_power_transition_ui(True)
+        self.status.set(
+            f"LCD OFF: playing stock shutdown animation; power-off follows after {SHUTDOWN_WAIT_SECONDS:g} seconds"
+        )
+        self._append_activity(
+            f"LCD OFF START: TX/cycling paused; Volume Down -> wait {SHUTDOWN_WAIT_SECONDS:g}s -> Power"
+        )
+        threading.Thread(target=self._gentle_power_off_worker, daemon=True).start()
+
+    def _gentle_power_off_worker(self) -> None:
+        try:
+            wakefulness = self.device.gentle_power_off()
+            self.after(0, self._gentle_power_off_finished, wakefulness, None)
+        except Exception as exc:
+            self.after(0, self._gentle_power_off_finished, None, exc)
+
+    def _gentle_power_off_finished(self, wakefulness: str | None, error: Exception | None) -> None:
+        if error is not None:
+            # A failed transition must not silently freeze an otherwise live
+            # dashboard. Resume traffic because the final LCD state is unknown.
+            self._lcd_transmission_paused.clear()
+            if self.lhm_live_running and self.cycle_enabled.get():
+                self._start_display_cycle()
+            self.status.set(f"LCD OFF failed: {error}")
+            self._append_activity(f"LCD OFF ERROR: {type(error).__name__}: {error}")
+            messagebox.showerror("LCD OFF failed", str(error))
+            self._set_power_transition_ui(False)
+            return
+        self._update_lcd_power_state(wakefulness)
+        self._set_power_transition_ui(False)
+        self.status.set("LCD OFF complete; Android is Asleep and the backlight should be off")
+        self._append_activity(f"LCD OFF COMPLETE: wakefulness={wakefulness}; TX remains paused")
+
+    def _gentle_power_on(self) -> None:
+        if self._power_transition_running:
+            return
+        self._lcd_transmission_paused.set()
+        self._stop_display_cycle()
+        self.device.close_live_session("gentle_power_on_pause")
+        self._set_power_transition_ui(True)
+        self.status.set("LCD ON: waking Android and playing the stock startup animation")
+        self._append_activity(
+            f"LCD ON START: Power -> wait {WAKE_STABILIZATION_SECONDS:g}s -> "
+            f"restart stock app -> wait {STARTUP_WAIT_SECONDS:g}s"
+        )
+        threading.Thread(target=self._gentle_power_on_worker, daemon=True).start()
+
+    def _gentle_power_on_worker(self) -> None:
+        try:
+            wakefulness = self.device.gentle_power_on()
+            self.after(0, self._gentle_power_on_finished, wakefulness, None)
+        except Exception as exc:
+            self.after(0, self._gentle_power_on_finished, None, exc)
+
+    def _gentle_power_on_finished(self, wakefulness: str | None, error: Exception | None) -> None:
+        if error is not None:
+            self.status.set(f"LCD ON failed: {error}")
+            self._append_activity(f"LCD ON ERROR: {type(error).__name__}: {error}")
+            messagebox.showerror("LCD ON failed", str(error))
+            self._set_power_transition_ui(False)
+            return
+
+        if self._power_resume_mode in LIVE_MODES:
+            self.lhm_live_mode = self._power_resume_mode
+            self.mode.set(self._power_resume_mode)
+        self._lcd_transmission_paused.clear()
+        if self.lhm_live_running and self.cycle_enabled.get():
+            self._start_display_cycle()
+        self._update_lcd_power_state(wakefulness)
+        self._set_power_transition_ui(False)
+        if self.lhm_live_running:
+            self.status.set("LCD ON complete; startup animation ended and live TX resumed")
+        else:
+            self.status.set("LCD ON complete; startup animation ended and the LCD is ready")
+        self._append_activity(
+            f"LCD ON COMPLETE: wakefulness={wakefulness}; restored_mode={self._power_resume_mode}; "
+            f"TX={'resumed' if self.lhm_live_running else 'idle'}"
+        )
 
     @staticmethod
     def _format_expected_frequency(value_mhz: int) -> str:

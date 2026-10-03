@@ -120,9 +120,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $notesPath = ".github/release-notes/$env:GITHUB_REF_NAME.md"
+          if (-not (Test-Path -LiteralPath $notesPath)) {
+            throw "Missing curated release description: $notesPath"
+          }
           gh release create $env:GITHUB_REF_NAME `
             '${{ steps.package.outputs.zip_path }}' `
             '${{ steps.package.outputs.checksum_path }}' `
             --verify-tag `
             --title "HAF 700 EVO Iris LCD Control $env:GITHUB_REF_NAME" `
-            --generate-notes
+            --notes-file $notesPath

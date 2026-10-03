@@ -11,7 +11,7 @@ This document is the standalone wire-protocol reference derived from the stock A
 - **Physically confirmed** means the user observed the expected result on the LCD.
 - **Unresolved** means a plausible field or behavior still lacks enough evidence.
 
-The fixed investigated unit has ADB serial `1234567890ABCDEF`. All other attached Android devices are outside this project's scope.
+The fixed investigated unit has ADB serial `1234567890ABCDEF`. The unrelated Android serial `R52N201MZPD` is outside this project's scope.
 
 ## Transport
 
@@ -278,6 +278,165 @@ adb -s 1234567890ABCDEF reboot
 ```
 
 Before reboot, the GUI removes only its own `tcp:18888` forward. Physical recovery from a backlight-only state was confirmed, but Android/LCD startup is unusually slow—approximately two minutes was observed in one logged GUI cycle.
+
+## Genuine transition videos and the corrected trigger attribution
+
+The stock APK contains `res/raw/shutdown.mp4` and `res/raw/start.mp4`, but its
+Volume-key playback path is unreliable. Decompiled `MediaView` starts IJK
+playback before `SplashActivity` attaches the video view. Device logs repeatedly
+show `Video: first frame decoded`, then `NULL native_window`, and only afterward
+surface attachment. Pausing telemetry removes competing view replacements but
+does not eliminate this ordering race.
+
+The unmodified device includes an MP4-capable system activity:
+
+```text
+com.android.gallery3d/.app.MovieActivity
+```
+
+An unchanged asset can be staged temporarily and launched without modifying
+the APK or firmware:
+
+```powershell
+adb -s 1234567890ABCDEF shell mkdir -p /data/local/tmp/haf_transition_test
+adb -s 1234567890ABCDEF push shutdown.mp4 /data/local/tmp/haf_transition_test/shutdown.mp4
+adb -s 1234567890ABCDEF shell chmod 644 /data/local/tmp/haf_transition_test/shutdown.mp4
+adb -s 1234567890ABCDEF shell am start -a android.intent.action.VIEW -d file:///data/local/tmp/haf_transition_test/shutdown.mp4 -t video/mp4 -n com.android.gallery3d/.app.MovieActivity
+```
+
+Use the corresponding path and filename for `start.mp4`. Do not use
+`am start -W` as proof of playback: it can report `Status: timeout` despite
+launching MovieActivity. Verify hashes, focus, decoder logs, and the physical
+LCD independently.
+
+| Asset | SHA-256 | Confirmed result |
+| --- | --- | --- |
+| `shutdown.mp4` | `0a812331a9a49461a4681d2410ee43b291c474dfafd59898f20274b84fc78e5c` | Genuine shutdown animation physically shown after stock Volume Down; it was not played by MovieActivity |
+| `start.mp4` | `b7d154170875d1965799196202e25197a5831c2748e63380ce0a511a2acd098e` | Opens as AVC but fails in the RDA hardware decoder, leaving backlight only |
+
+Important chronology correction for the one physically successful shutdown
+playback: Gallery was launched only after the stock Volume-Down handler had
+already attempted shutdown playback for 30 seconds from the CM-logo state.
+That preceding attempt kept brightness at 255 and logged `NULL native_window`,
+but it may have primed media or display state. The exact successful sequence
+was:
+
+```powershell
+adb -s 1234567890ABCDEF shell input keyevent 25
+# Wait 30 seconds, then launch shutdown.mp4 through MovieActivity.
+```
+
+The sequence was reproduced from a clean post-reboot CM-logo state. The user
+observed the genuine shutdown animation immediately from the stock Volume-Down
+path. The later Gallery launch then failed in OMX and left only the backlight
+visible. This proves the earlier animation was misattributed to Gallery. Do not
+use Gallery in the shutdown design.
+
+The startup failure was reproduced both from a clean post-reboot CM-logo state
+and immediately after a verified `Asleep -> Awake` transition. In both cases
+the system player reported `OMX-VPU interrupt timeout`, `OMX_EventError`, and
+`MEDIA_ERROR -2147483648`. Therefore being in the off state is not sufficient.
+A possible non-APK next step is to re-encode a derived temporary copy of
+`start.mp4` to codec parameters proven compatible with the working shutdown
+asset, while preserving the original file and hash.
+
+The stock reboot path is different from Gallery and does invoke the startup
+asset successfully through bundled IJK/FFmpeg. A clean boot trace showed:
+
+1. `SplashActivity.onCreate()` calls `initView()`.
+2. `initView()` calls `mediaView.setVideoRaw(callback, false)`, whose recovered
+   implementation always selects `R.raw.start`.
+3. IJK opens and starts the 480x480 stream.
+4. The first decoded frame still encounters `NULL native_window`, but the
+   surface attaches about 250 ms later and playback continues.
+5. `FFP_MSG_COMPLETED` arrives about 27 seconds after playback preparation.
+6. The completion callback parses the persisted `currentType` and restores that
+   display (mode 18 CM logo in the captured run).
+
+Captured device timeline on 2026-10-03:
+
+```text
+01:19:23.050  IJK prepare/start for bundled start video
+01:19:23.990  first frame decoded; NULL native_window
+01:19:24.240  video surface attached
+01:19:50.790  FFP_MSG_COMPLETED
+01:19:57.260  host ADB connection returned
+```
+
+This explains why an observer connecting after reboot sees only the restored
+logo: the startup video has already finished before ADB becomes available.
+Gallery uses Android's older hardware OMX path instead of the APK's IJK/FFmpeg
+path, which explains why the identical `start.mp4` can complete during stock
+boot yet fail in Gallery with a VPU timeout.
+
+The same successful IJK startup path can be triggered without rebooting Android
+and without modifying the APK:
+
+```powershell
+adb -s 1234567890ABCDEF shell am force-stop com.magic.box
+# Wait for Android HOME to recreate SplashActivity and verify port 9900 LISTEN.
+# Use an explicit am start only as a fallback if the process did not return.
+```
+
+On the clean device this created a fresh `SplashActivity`, invoked `initView()`,
+played the bundled `R.raw.start` through IJK for approximately 27 seconds,
+emitted `FFP_MSG_COMPLETED`, and restored persisted `currentType`. The user
+physically confirmed the genuine startup splash was visible. Because
+`com.magic.box` is the HOME activity, so Android relaunches it immediately after
+`force-stop`. A later live test proved that stacking an explicit `am start` on
+top of that automatic launch can create two `SplashActivity` instances. Both
+call `initSocket()`; the second port-9900 bind fails and OkSocket's catch path
+calls `shutdown()`, removing the valid listener. The correct path is therefore
+force-stop once, wait for automatic HOME restoration, and require port 9900 to
+be listening. Explicit start is only a fallback when no stock process returns.
+
+The currently confirmed non-APK transition strategy uses stock application
+paths for both animations:
+
+- stop telemetry/cycling, ensure the stock app is in a clean visible state,
+  send Volume Down (key 25), and let its delayed IJK shutdown playback finish
+  before powering the Android display off;
+- on wake, restart the stock `com.magic.box` activity and let its bundled IJK
+  path play the genuine startup asset to completion;
+- restore the selected metric and resume telemetry only after the startup
+  playback/completion window and a successful protocol readiness check.
+
+The shutdown half has now been physically validated end to end. Starting from
+the stable CM logo with telemetry stopped, send Volume Down (key 25), wait 35
+seconds, and then send Android Power (key 26). In the confirmed run the stock
+player began preparing the shutdown asset about six seconds after the key
+event; the user saw the entire animation finish before Power, after which the
+LCD and backlight were fully off and Android reported
+`mWakefulness=Asleep`. Treat 35 seconds as the currently proven conservative
+delay, not as the exact media duration.
+
+The matching wake half is also physically validated. From the fully off state:
+
+1. Send Android Power (key 26).
+2. Wait three seconds and verify Android is Awake.
+3. Force-stop only `com.magic.box`.
+4. Start `com.magic.box/.ui.SplashActivity`.
+5. Do not send display frames while the startup video is playing.
+
+The user observed the complete genuine `start.mp4`, followed by the persisted
+CM logo. This establishes the transition sequence itself; a controller must
+still wait for startup completion/readiness before restoring its previous mode
+and resuming telemetry.
+
+Android `dumpsys power` `mWakefulness` matches the physically confirmed panel
+power states and is suitable for control gating: internal `Awake` is displayed
+as `ON` and permits OFF; `Asleep` is displayed as `OFF` and permits ON. This state does not describe
+which metric or video is currently rendered.
+
+The panel retains its last framebuffer across Android Power-off. On wake, that
+retained image may flash briefly before the first `start.mp4` frame reaches the
+surface. This is a confirmed cosmetic artifact, not an early telemetry send;
+host TX remained paused throughout the observed flash and startup playback.
+
+Gallery handoff can leave the panel backlight-only and the stock HOME activity
+without a focused window. Stopping Gallery and restarting `SplashActivity` did
+not reliably recover that state during testing. The confirmed recovery remains
+the fixed-serial HAF reboot documented above.
 
 ## Current sender rules
 

@@ -1,6 +1,6 @@
 # HAF 700 EVO Iris experimental controller
 
-Current version: **v0.0.1**
+Current version: **v0.0.2**
 
 This is an experimental Windows GUI replacement for the Cooler Master HAF 700 EVO Iris display control path. It implements behavior recovered from the stock Android application and physically tested on the development unit:
 
@@ -11,6 +11,8 @@ This is an experimental Windows GUI replacement for the Cooler Master HAF 700 EV
 - extended manual -20 to +150 C CPU-temperature tests using confirmed mode 3 and captured stock 40/80 style bounds;
 - physically validated manual controls for numeric renderer modes 2 and 4-13: GPU clock/temperature, CPU/GPU/RAM usage, CPU fan, and case fans 1-5;
 - a confirmation-gated reboot button that runs `adb -s 1234567890ABCDEF reboot` and removes the app's HAF-specific forward;
+- physically validated **LCD OFF** and **LCD ON** controls that use the stock shutdown/startup animations and preserve the running LHM helper;
+- `ON`/`OFF`/`UNKNOWN` power-state gating so only the valid next LCD power action is enabled;
 - bounded per-session JSONL logs under `logs/`;
 - a timestamped activity log on the right showing decoded transmitted fields, full TX frame hex, received ACK hex/match state, ADB forwarding, CPU sensor probes, and reboot results.
 - a read-only CPU sensor probe backed by the workspace-local LibreHardwareMonitor helper.
@@ -31,7 +33,7 @@ Requirements:
 - [Android SDK Platform-Tools for Windows](https://developer.android.com/tools/releases/platform-tools), with `adb.exe` available on `PATH`;
 - the Python packages listed in `requirements.txt`.
 
-The initial `v0.0.1` ZIP is a source/runtime package and does not bundle
+The `v0.0.2` ZIP is a source/runtime package and does not bundle
 Python, .NET, or Android Platform-Tools. Install those prerequisites before
 launching the application.
 
@@ -97,6 +99,10 @@ builds the helper, checks the Python source, creates a versioned Windows x64
 ZIP, generates `SHA256SUMS.txt` for that ZIP, and attaches both files to the
 corresponding GitHub Release. Checksums belong to packaged release artifacts;
 the source repository does not maintain a per-file checksum manifest.
+
+Each tagged release requires a curated description at
+`.github/release-notes/vMAJOR.MINOR.PATCH.md`. CI publishes that file as the
+GitHub Release description rather than generating a generic pull-request list.
 
 ## License and project status
 
