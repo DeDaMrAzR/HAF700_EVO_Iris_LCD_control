@@ -133,11 +133,18 @@ dotnet build .\sensor_helper\HafCpuSensors.csproj -c Release
 See `protocol.md` for the recovered wire protocol and evidence boundaries. Third-party licenses and credits are in `THIRD_PARTY_NOTICES.md` and `licenses/`.
 
 
-## License and project status
+## Licence and credits
 
 The original Python, C#, PowerShell, and launcher source in this project is
 licensed under the Mozilla Public License 2.0. See `LICENSE`. Third-party
 components retain their own licenses and notices.
+
+Hardware telemetry is provided through `LibreHardwareMonitorLib` from the
+[Libre Hardware Monitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
+open-source project. Credit and thanks go to its maintainers and contributors
+for the hardware-monitoring library that makes the live sensor integration
+possible. Libre Hardware Monitor remains under its own license; the applicable
+notice and license text are included in `THIRD_PARTY_NOTICES.md` and `licenses/`.
 
 The project is an unofficial community effort and is not affiliated with or
 endorsed by Cooler Master. Cooler Master, HAF, and related names and marks
