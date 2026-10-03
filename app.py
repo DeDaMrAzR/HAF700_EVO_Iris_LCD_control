@@ -825,10 +825,30 @@ class HafApp(tk.Tk):
         self._schedule_cycle_tick()
 
     def _cycle_next(self) -> None:
+        """Advance one live display, whether timed cycling is on or off.
+
+        The button is a manual display selector, not an enable-cycling button.
+        When automatic cycling is active we advance its existing state so the
+        countdown restarts.  Otherwise a short-lived DisplayCycle gives us the
+        exact same ordering and wraparound behavior without starting a timer.
+        """
+        if not self.lhm_live_running:
+            self._append_activity("DISPLAY NEXT ignored; start LHM live mode first")
+            return
+
         cycle = self._display_cycle
         if cycle is None:
-            self._append_activity("DISPLAY CYCLE NEXT ignored; enable cycling during LHM live mode")
+            try:
+                seconds = max(5, min(300, int(self.cycle_seconds.get())))
+            except (TypeError, ValueError, tk.TclError):
+                seconds = 15
+            active = self.lhm_live_mode or self.mode.get()
+            manual_cycle = DisplayCycle(self.settings.cycle_modes, seconds, active)
+            self._select_cycle_mode(manual_cycle.next(), "manual-next")
+            # Manual navigation must not silently enable the automatic timer.
+            self.cycle_status.set("Cycle off")
             return
+
         self._select_cycle_mode(cycle.next(), "manual-next")
         self._update_cycle_status()
 
