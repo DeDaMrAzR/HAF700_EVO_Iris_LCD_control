@@ -255,7 +255,7 @@ These are documented for completeness, not endorsed for experimentation:
 
 | Command | APK name | Recovered behavior |
 | ---: | --- | --- |
-| `10` | `LED_DIRECTION` | Sets rotation and acknowledges |
+| `10` | `LED_DIRECTION` | Sets the complete LCD orientation in 90° steps and returns `10 80 00 01 00 00` |
 | `E0` | `RESET` / duplicated `QUERY_FILE_NAME` | No action in this build |
 | `FC` | `SYNC_TIME` | Sets system time/timezone |
 | `F0` | `QUERY_SPACE` | Returns external-storage geometry |
@@ -275,6 +275,32 @@ These are documented for completeness, not endorsed for experimentation:
 | `1A` | `SET_VOLUME` | Enum exists; no handler branch found |
 
 File commands are unsafe to probe casually. The recovered code directly concatenates received names beneath app storage without canonical-path validation, validates extension rather than content, and lacks robust length/hash checks. `QUERY_FILE_LIST` can also crash its request path when the directory is empty.
+
+### `0x10` — `LED_DIRECTION`
+
+The frame contains a one-byte body:
+
+```text
+10 80 00 01 00 01 <direction>
+```
+
+The stock application computes `(direction - 1) * 90 mod 360`, stores the
+result as `screenKey`, applies the corresponding requested orientation, and
+returns:
+
+```text
+10 80 00 01 00 00
+```
+
+| Body value | Stored angle | Application orientation | Confirmation |
+| ---: | ---: | --- | --- |
+| `1` | 0° | Normal | Physically confirmed |
+| `2` | 90° | Entire LCD rotated 90° clockwise | Physically confirmed |
+| `3` | 180° | Entire LCD rotated 180° | Source confirmed only |
+| `4` | 270° | Entire LCD rotated 270° clockwise | Source confirmed only |
+
+Body value `2` was physically confirmed on the LCD and body value `1` restored
+the original orientation. Values outside 1–4 are not used.
 
 ## Device reboot and recovery
 
