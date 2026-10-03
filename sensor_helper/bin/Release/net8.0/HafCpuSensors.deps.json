@@ -6,7 +6,7 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v8.0": {
-      "HafCpuSensors/0.0.2": {
+      "HafCpuSensors/0.0.3": {
         "dependencies": {
           "LibreHardwareMonitorLib": "0.9.6"
         },
@@ -421,7 +421,7 @@
     }
   },
   "libraries": {
-    "HafCpuSensors/0.0.2": {
+    "HafCpuSensors/0.0.3": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

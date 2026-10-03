@@ -55,13 +55,15 @@ if (ownerIndex >= 0)
     ownerProcessId = parsedOwner;
 }
 
-// Normal one-shot CPU diagnostics stay narrow. The live telemetry path enables
-// only the three hardware groups needed for LCD modes 1-7; disks, networking,
-// motherboard/Super-I/O, controllers, batteries and PSU polling remain off.
+// Normal one-shot CPU diagnostics stay narrow. Live telemetry also opens the
+// motherboard tree for mode 8 CPU-fan RPM. We still leave disks, networking,
+// controllers, batteries and PSU polling off; fan data comes from the same
+// persistent two-second snapshot rather than another helper or polling loop.
 Computer computer = new()
 {
     IsCpuEnabled = true,
     IsGpuEnabled = allTelemetry || compactFrequency,
+    IsMotherboardEnabled = allTelemetry || compactFrequency,
     // Memory is enabled only for explicit inventory. The live loop uses the
     // cheap Win32 system-memory counter below; LHM Memory also walks DIMM/SPD
     // hardware on this machine and made a compact probe exceed 30 seconds.
@@ -107,7 +109,7 @@ do
         foreach (IHardware hardware in computer.Hardware.Where(item =>
                      item.HardwareType == HardwareType.Cpu ||
                      ((allTelemetry || compactFrequency) &&
-                      item.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel or HardwareType.Memory)))
+                      item.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel or HardwareType.Memory or HardwareType.Motherboard)))
         {
             UpdateRecursive(hardware);
             CollectRecursive(hardware, sensors);
@@ -264,6 +266,7 @@ static TelemetrySnapshot BuildTelemetrySnapshot(IReadOnlyList<SensorRecord> sens
         ?? FindPreferredSensor(sensors, "Gpu", "Temperature", "GPU Core");
     SensorRecord? gpuLoad = byId.GetValueOrDefault("/gpu-nvidia/0/load/0")
         ?? FindPreferredSensor(sensors, "Gpu", "Load", "GPU Core");
+    SensorRecord? cpuFan = FindCpuFanSensor(sensors);
     // `/vram/load/1` is page-file/virtual-memory pressure and was 39.0% in the
     // same capture where physical RAM was 33.3%. Mode 7 must use Total Memory.
     float? memoryLoad = ReadPhysicalMemoryLoad();
@@ -284,10 +287,32 @@ static TelemetrySnapshot BuildTelemetrySnapshot(IReadOnlyList<SensorRecord> sens
         gpuTemperature?.SensorIdentifier,
         gpuLoad?.Value,
         gpuLoad?.SensorIdentifier,
+        cpuFan?.Value,
+        cpuFan?.SensorIdentifier,
+        cpuFan?.SensorName,
+        cpuFan?.HardwareName,
         memoryLoad,
         "win32:GlobalMemoryStatusEx.dwMemoryLoad",
         cores
     );
+}
+
+static SensorRecord? FindCpuFanSensor(IReadOnlyList<SensorRecord> sensors)
+{
+    // Board vendors do not expose a portable "CPU fan" identifier. Prefer an
+    // explicitly named CPU channel. If labels are generic, accept a fallback
+    // only when exactly one non-GPU fan is spinning; choosing arbitrarily from
+    // several active headers would put a confidently wrong value on the LCD.
+    List<SensorRecord> fans = sensors.Where(sensor =>
+        sensor.SensorType.Equals("Fan", StringComparison.OrdinalIgnoreCase) &&
+        !sensor.HardwareType.StartsWith("Gpu", StringComparison.OrdinalIgnoreCase) &&
+        sensor.Value is not null).ToList();
+    SensorRecord? namedCpuFan = fans.FirstOrDefault(sensor =>
+        sensor.SensorName.Contains("CPU", StringComparison.OrdinalIgnoreCase));
+    if (namedCpuFan is not null)
+        return namedCpuFan;
+    List<SensorRecord> active = fans.Where(sensor => sensor.Value > 0).ToList();
+    return active.Count == 1 ? active[0] : null;
 }
 
 static float? ReadPhysicalMemoryLoad()
@@ -370,6 +395,10 @@ internal sealed record TelemetrySnapshot(
     string? GpuCoreTemperatureIdentifier,
     float? GpuCoreLoadPercent,
     string? GpuCoreLoadIdentifier,
+    float? CpuFanRpm,
+    string? CpuFanIdentifier,
+    string? CpuFanName,
+    string? CpuFanHardwareName,
     float? MemoryLoadPercent,
     string? MemoryLoadIdentifier,
     IReadOnlyList<CoreFrequencyRecord> Cores

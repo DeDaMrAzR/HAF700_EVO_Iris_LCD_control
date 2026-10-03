@@ -9,7 +9,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OutputPath,
 
-    [switch]$AllTelemetry
+    [switch]$AllTelemetry,
+
+    [switch]$CompactFrequency
 )
 
 $arguments = @(
@@ -23,6 +25,10 @@ $arguments = @(
 # hardware groups in addition to the CPU so we can record stable identifiers.
 if ($AllTelemetry) {
     $arguments += '--all-telemetry'
+}
+
+if ($CompactFrequency) {
+    $arguments += '--compact-frequency'
 }
 
 # Keep a sidecar of the exact wrapper decision. It contains no sensor values,

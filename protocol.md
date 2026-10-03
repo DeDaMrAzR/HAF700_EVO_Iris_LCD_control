@@ -127,7 +127,7 @@ All modes exposed below have been physically confirmed to render and respond to 
 | 5 | CPU usage | 0–100% | Confirmed: LHM CPU Total |
 | 6 | GPU usage | 0–100% | Implemented: LHM GPU Core `/gpu-nvidia/0/load/0`; physical live-cycle confirmation pending |
 | 7 | RAM usage | 0–100% | Implemented: Win32 physical-memory load; physical live-cycle confirmation pending |
-| 8 | CPU fan | 0–10000 RPM | Sensor mapping pending |
+| 8 | CPU fan | 0–10000 RPM | Implemented and physically confirmed: prefer an LHM CPU-labelled motherboard fan, otherwise only the sole active non-GPU fan. Development host resolves `ITE IT8689E` `Fan #2` `/lpc/it8689e/0/fan/1` |
 | 9 | Case fan 1 | 0–10000 RPM | Sensor mapping pending |
 | 10 | Case fan 2 | 0–10000 RPM | Sensor mapping pending |
 | 11 | Case fan 3 | 0–10000 RPM | Sensor mapping pending |
@@ -453,7 +453,7 @@ the fixed-serial HAF reboot documented above.
 
 ## Unresolved or deliberately deferred
 
-- Exact automatic sensor identifiers/semantics for CPU fan and case fans. Modes 2, 4, 6, and 7 are mapped but still await complete physical live-cycle confirmation.
+- Exact automatic sensor identifiers/semantics for case fans. The development host's mode-8 CPU-fan source and selectable live cycle are physically confirmed; hardware labels may differ on another motherboard.
 - Whether a useful stock `0x14 QUERY_MODE_DATA` carousel can be driven entirely on-device without the PC continuously supplying records. The replacement app currently performs deterministic host-side cycling instead.
 - A genuine physical-framebuffer/panel-present acknowledgement path.
 - Why the stock APK sometimes reaches a backlight-only state and why its boot is slow.

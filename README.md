@@ -1,14 +1,14 @@
 # HAF 700 EVO Iris experimental controller
 
-Current development version: **v0.0.3-dev**
+Current version: **v0.0.3**
 
-Latest published release: **v0.0.2**
+Latest published release: **v0.0.3**
 
 This is an experimental Windows GUI replacement for the Cooler Master HAF 700 EVO Iris display control path. It implements behavior recovered from the stock Android application and physically tested on the development unit:
 
 - fixed ADB target `1234567890ABCDEF`;
 - temporary `localhost:18888 -> device:9900` forwarding;
-- automatic CPU/GPU frequency, CPU/GPU temperature, CPU/GPU usage, and physical RAM usage modes;
+- automatic CPU/GPU frequency, CPU/GPU temperature, CPU/GPU usage, physical RAM usage, and CPU fan RPM modes;
 - extended manual 0-9,990 MHz CPU-frequency display tests using command `0x12` while retaining stock 1,100/6,000 MHz style bounds;
 - extended manual -20 to +150 C CPU-temperature tests using confirmed mode 3 and captured stock 40/80 style bounds;
 - physically validated manual controls for numeric renderer modes 2 and 4-13: GPU clock/temperature, CPU/GPU/RAM usage, CPU fan, and case fans 1-5;
@@ -18,8 +18,8 @@ This is an experimental Windows GUI replacement for the Cooler Master HAF 700 EV
 - bounded per-session JSONL logs under `logs/`;
 - a timestamped activity log on the right showing decoded transmitted fields, full TX frame hex, received ACK hex/match state, ADB forwarding, CPU sensor probes, and reboot results.
 - a read-only CPU sensor probe backed by the workspace-local LibreHardwareMonitor helper.
-- a live dashboard showing current/session-min/session-max values and bars for CPU/GPU frequency, CPU/GPU temperature, CPU/GPU usage, and physical RAM usage;
-- a configurable debug-visible cycle through automatic numeric modes 1-7 without additional per-mode polling;
+- a live dashboard showing current/session-min/session-max values and bars for CPU/GPU frequency, CPU/GPU temperature, CPU/GPU usage, physical RAM usage, and CPU fan RPM;
+- eight ordered display slots, each selectable as any automatic metric or `Off`; timed cycling and manual **Next** share that visible sequence without additional per-mode polling;
 - JSON-backed window/startup preferences, optional per-user Windows logon registration, automatic fixed-device connection, and automatic LHM start;
 - optional notification-area operation provided by the declared `pystray` dependency.
 
@@ -35,7 +35,7 @@ Requirements:
 - [Android SDK Platform-Tools for Windows](https://developer.android.com/tools/releases/platform-tools), with `adb.exe` available on `PATH`;
 - the Python packages listed in `requirements.txt`.
 
-The `v0.0.2` ZIP is a source/runtime package and does not bundle
+The `v0.0.3` ZIP is a source/runtime package and does not bundle
 Python, .NET, or Android Platform-Tools. Install those prerequisites before
 launching the application.
 
@@ -67,7 +67,7 @@ The LibreHardwareMonitor-backed helper is under `sensor_helper/`. The main Pytho
 
 The **Start LHM live...** test uses one persistent elevated helper at a two-second cadence. It pairs P-core clocks with their two logical-thread load sensors and E-core clocks one-to-one, then sends the core-load-weighted clock as a non-persistent CPU-frequency update. The highest-loaded core and its clock remain logged as comparison evidence but are not transmitted. The compact JSONL evidence includes both candidates, total load, the encoded value, strategy name, and cumulative helper process CPU time. **Stop LHM**, disconnect, reboot, and window close create a stop sentinel; the helper exits after its current sampling interval. This remains a candidate-semantic test, not a finalized definition of whole-CPU frequency.
 
-Live mode supports numeric modes 1-7. CPU frequency uses the load-weighted physical-core clock; GPU frequency, temperature, and usage use LHM `GPU Core`; CPU temperature uses CPU Package; CPU usage uses CPU Total; RAM usage uses Windows `GlobalMemoryStatusEx.dwMemoryLoad` for cheap physical-memory load. The native RAM counter is intentional: enabling LHM's complete Memory group also walks DIMM/SPD data and made a compact test exceed 30 seconds. One helper snapshot contains every value and updates every dashboard card. Optional cycling changes only the value encoded from the next complete snapshot, so it adds no per-mode process or poll.
+Live mode supports numeric modes 1-8. CPU frequency uses the load-weighted physical-core clock; GPU frequency, temperature, and usage use LHM `GPU Core`; CPU temperature uses CPU Package; CPU usage uses CPU Total; RAM usage uses Windows `GlobalMemoryStatusEx.dwMemoryLoad` for cheap physical-memory load. CPU fan uses a CPU-labelled motherboard channel when available, otherwise the sole active non-GPU fan; the activity log records the exact chosen hardware, sensor name, and identifier. The native RAM counter is intentional: enabling LHM's complete Memory group also walks DIMM/SPD data and made a compact test exceed 30 seconds. One helper snapshot contains every value and updates every dashboard card. Optional cycling changes only the value encoded from the next complete snapshot, so it adds no per-mode process or poll.
 
 Completed live-helper scratch logs are removed after a clean stop because the application session JSONL already records the compact reading and transmitted frame. Cleanup exists on both sides: Python handles normal Stop/Exit, and the helper removes its own scratch files after an owner-death shutdown. The main session logger rotates at 5 MiB and keeps two older segments, bounding one continuously running session to roughly 15 MiB without splitting JSON records. **Clean old logs...** previews a retention action, asks for confirmation, protects the active files, and keeps the newest 10 sessions, 5 helper streams, and 5 one-shot probes. New helpers also receive the GUI owner PID and exit automatically if that GUI disappears.
 

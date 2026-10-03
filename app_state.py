@@ -17,6 +17,7 @@ GPU_TEMPERATURE = "GPU temperature"
 CPU_USAGE = "CPU usage"
 GPU_USAGE = "GPU usage"
 RAM_USAGE = "RAM usage"
+CPU_FAN = "CPU fan"
 LIVE_MODES = (
     CPU_FREQUENCY,
     GPU_FREQUENCY,
@@ -25,6 +26,7 @@ LIVE_MODES = (
     CPU_USAGE,
     GPU_USAGE,
     RAM_USAGE,
+    CPU_FAN,
 )
 # Historical internal alias retained so older local imports do not break.
 LIVE_CPU_MODES = LIVE_MODES
@@ -54,16 +56,24 @@ class AppSettings:
             return cls()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            has_saved_modes = "cycle_modes" in data
             modes = tuple(mode for mode in data.get("cycle_modes", LIVE_CPU_MODES) if mode in LIVE_CPU_MODES)
             # The first QoL build stored only the three CPU modes because those
             # were all it could acquire. Upgrade that exact legacy default to
             # the new complete 1-7 sequence; custom future subsets stay intact.
             if modes == (CPU_FREQUENCY, CPU_TEMPERATURE, CPU_USAGE):
                 modes = LIVE_CPU_MODES
+            # v0.0.2 stored the exact seven-mode default. Extend only that
+            # known default; a user's custom subset and order remain theirs.
+            legacy_seven = LIVE_CPU_MODES[:-1]
+            if modes == legacy_seven:
+                modes = LIVE_CPU_MODES
             return cls(
                 cycle_enabled=bool(data.get("cycle_enabled", False)),
                 cycle_seconds=max(5, min(300, int(data.get("cycle_seconds", 15)))),
-                cycle_modes=modes or LIVE_CPU_MODES,
+                # An explicitly empty list means the user turned every slot
+                # Off. Only a missing setting receives the default sequence.
+                cycle_modes=modes if has_saved_modes else LIVE_CPU_MODES,
                 minimize_to_tray=bool(data.get("minimize_to_tray", True)),
                 start_minimized=bool(data.get("start_minimized", False)),
                 auto_connect=bool(data.get("auto_connect", False)),

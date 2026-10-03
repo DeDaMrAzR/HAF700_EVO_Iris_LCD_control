@@ -21,6 +21,7 @@ from app_state import AppSettings, DisplayCycle, MetricStats
 from cpu_sensors import (
     ElevatedFrequencyStream,
     read_once_elevated,
+    select_cpu_fan_rpm,
     select_cpu_package_temperature,
     select_cpu_total_load,
     select_gpu_core_frequency,
@@ -59,6 +60,7 @@ GPU_TEMPERATURE_MODE = "GPU temperature"
 CPU_USAGE_MODE = "CPU usage"
 GPU_USAGE_MODE = "GPU usage"
 RAM_USAGE_MODE = "RAM usage"
+CPU_FAN_MODE = "CPU fan"
 LIVE_MODES = (
     FREQUENCY_MODE,
     GPU_FREQUENCY_MODE,
@@ -67,7 +69,9 @@ LIVE_MODES = (
     CPU_USAGE_MODE,
     GPU_USAGE_MODE,
     RAM_USAGE_MODE,
+    CPU_FAN_MODE,
 )
+CYCLE_SLOT_OFF = "Off"
 MODE_CONFIGS = {
     FREQUENCY_MODE: (1, MIN_MHZ, MAX_MHZ, 1500, "MHz", "extended range"),
     TEMPERATURE_MODE: (3, MIN_TEMPERATURE_C, MAX_TEMPERATURE_C, 45, "°C", "extended range"),
@@ -117,6 +121,7 @@ class HafApp(tk.Tk):
             CPU_USAGE_MODE: MetricStats(),
             GPU_USAGE_MODE: MetricStats(),
             RAM_USAGE_MODE: MetricStats(),
+            CPU_FAN_MODE: MetricStats(),
         }
         self.metric_current_vars = {mode: tk.StringVar(value="--") for mode in self.metric_stats}
         self.metric_range_vars = {mode: tk.StringVar(value="Min --  |  Max --") for mode in self.metric_stats}
@@ -124,6 +129,9 @@ class HafApp(tk.Tk):
         self.cycle_enabled = tk.BooleanVar(value=self.settings.cycle_enabled)
         self.cycle_seconds = tk.IntVar(value=self.settings.cycle_seconds)
         self.cycle_status = tk.StringVar(value="Cycle off")
+        saved_cycle_modes = list(self.settings.cycle_modes[: len(LIVE_MODES)])
+        saved_cycle_modes.extend([CYCLE_SLOT_OFF] * (len(LIVE_MODES) - len(saved_cycle_modes)))
+        self.cycle_slot_vars = [tk.StringVar(value=mode) for mode in saved_cycle_modes]
         self._display_cycle: DisplayCycle | None = None
         # Tkinter widgets may only be touched by the main thread. The helper
         # worker posts snapshots with `after`; this timer also lives in Tk.
@@ -354,6 +362,7 @@ class HafApp(tk.Tk):
             (CPU_USAGE_MODE, "CPU USAGE", 100.0, "%"),
             (GPU_USAGE_MODE, "GPU USAGE", 100.0, "%"),
             (RAM_USAGE_MODE, "RAM USAGE", 100.0, "%"),
+            (CPU_FAN_MODE, "CPU FAN", 3000.0, " RPM"),
         )
         for index, (metric_mode, title, maximum, unit) in enumerate(metric_specs):
             row, column = divmod(index, 4)
@@ -374,7 +383,7 @@ class HafApp(tk.Tk):
             row=controls_row, column=0, sticky="w", padx=4, pady=(10, 0)
         )
         ttk.Checkbutton(
-            dashboard, text="Cycle displays 1–7", variable=self.cycle_enabled,
+            dashboard, text="Cycle selected displays", variable=self.cycle_enabled,
             command=self._cycle_setting_changed,
         ).grid(row=controls_row, column=1, sticky="w", padx=4, pady=(10, 0))
         cycle_controls = ttk.Frame(dashboard)
@@ -382,8 +391,27 @@ class HafApp(tk.Tk):
         ttk.Spinbox(cycle_controls, from_=5, to=300, width=5, textvariable=self.cycle_seconds).pack(side="left")
         ttk.Label(cycle_controls, text=" sec").pack(side="left")
         ttk.Button(cycle_controls, text="Next", command=self._cycle_next).pack(side="left", padx=(8, 0))
+        ttk.Label(dashboard, text="Display order").grid(
+            row=3, column=0, sticky="w", padx=4, pady=(8, 2)
+        )
+        cycle_slot_frame = ttk.Frame(dashboard)
+        cycle_slot_frame.grid(row=4, column=0, columnspan=4, sticky="ew", padx=4)
+        for index, variable in enumerate(self.cycle_slot_vars):
+            slot = ttk.Frame(cycle_slot_frame)
+            slot.grid(row=index // 4, column=index % 4, sticky="ew", padx=(0, 8), pady=2)
+            ttk.Label(slot, text=f"{index + 1}").pack(side="left", padx=(0, 4))
+            selector = ttk.Combobox(
+                slot,
+                textvariable=variable,
+                values=(CYCLE_SLOT_OFF, *LIVE_MODES),
+                state="readonly",
+                width=18,
+            )
+            selector.pack(side="left", fill="x", expand=True)
+            selector.bind("<<ComboboxSelected>>", self._cycle_slots_changed)
+            cycle_slot_frame.columnconfigure(index % 4, weight=1)
         ttk.Label(dashboard, textvariable=self.cycle_status, style="Subtitle.TLabel").grid(
-            row=3, column=0, columnspan=4, sticky="w", padx=4, pady=(7, 0)
+            row=5, column=0, columnspan=4, sticky="w", padx=4, pady=(7, 0)
         )
 
         sensors = ttk.LabelFrame(
@@ -515,7 +543,7 @@ class HafApp(tk.Tk):
         if selected not in LIVE_MODES:
             messagebox.showerror(
                 "Unsupported live mode",
-                "Select one of the live display modes 1-7 before starting LHM.",
+                "Select one of the live display modes 1-8 before starting LHM.",
             )
             return
         self.lhm_live_mode = selected
@@ -576,6 +604,7 @@ class HafApp(tk.Tk):
                     gpu_temp = sample.get("gpu_core_temperature_c")
                     gpu_load = sample.get("gpu_core_load_percent")
                     memory_load = sample.get("memory_load_percent")
+                    cpu_fan_rpm = sample.get("cpu_fan_rpm")
                     # lhm_live_mode may be advanced by the main-thread cycle
                     # timer. Reading the string here makes the next complete
                     # snapshot the atomic boundary between two LCD modes.
@@ -645,6 +674,16 @@ class HafApp(tk.Tk):
                         metric_message = f"Memory load={memory_load}% -> encoded={value}%"
                         strategy = "memory_load"
                         source_identifier = sample.get("memory_load_identifier")
+                    elif live_mode == CPU_FAN_MODE:
+                        value = select_cpu_fan_rpm(sample)
+                        frame = build_provisional_metric_frame(8, value, persist=False)
+                        expected = str(value)
+                        metric_message = (
+                            f"CPU fan={cpu_fan_rpm} RPM source={sample.get('cpu_fan_hardware_name')} "
+                            f"{sample.get('cpu_fan_name')} -> encoded={value} RPM"
+                        )
+                        strategy = "cpu_named_or_sole_active_non_gpu_fan"
+                        source_identifier = sample.get("cpu_fan_identifier")
                     else:
                         raise RuntimeError(f"unsupported LHM live mode: {live_mode}")
                     sample_time = datetime.fromisoformat(str(sample["timestamp"]))
@@ -674,6 +713,9 @@ class HafApp(tk.Tk):
                         gpu_core_temperature_c=gpu_temp,
                         gpu_core_load_percent=gpu_load,
                         memory_load_percent=memory_load,
+                        cpu_fan_rpm=cpu_fan_rpm,
+                        cpu_fan_name=sample.get("cpu_fan_name"),
+                        cpu_fan_hardware_name=sample.get("cpu_fan_hardware_name"),
                         live_mode=live_mode,
                         transmit_strategy=strategy,
                         source_identifier=source_identifier,
@@ -681,6 +723,7 @@ class HafApp(tk.Tk):
                         encoded_unit=(
                             "MHz" if live_mode in (FREQUENCY_MODE, GPU_FREQUENCY_MODE)
                             else "C" if live_mode in (TEMPERATURE_MODE, GPU_TEMPERATURE_MODE)
+                            else "RPM" if live_mode == CPU_FAN_MODE
                             else "%"
                         ),
                         helper_process_cpu_milliseconds=cpu_ms,
@@ -744,6 +787,7 @@ class HafApp(tk.Tk):
             CPU_USAGE_MODE: sample.get("cpu_total_load_percent"),
             GPU_USAGE_MODE: sample.get("gpu_core_load_percent"),
             RAM_USAGE_MODE: sample.get("memory_load_percent"),
+            CPU_FAN_MODE: sample.get("cpu_fan_rpm"),
         }
         for metric_mode, raw in candidates.items():
             if raw is None:
@@ -758,6 +802,9 @@ class HafApp(tk.Tk):
             elif metric_mode in (TEMPERATURE_MODE, GPU_TEMPERATURE_MODE):
                 current = f"{numeric:.0f} °C"
                 extrema = f"Min {stats.minimum:.0f}  |  Max {stats.maximum:.0f} °C"
+            elif metric_mode == CPU_FAN_MODE:
+                current = f"{numeric:.0f} RPM"
+                extrema = f"Min {stats.minimum:.0f}  |  Max {stats.maximum:.0f} RPM"
             else:
                 current = f"{numeric:.0f}%"
                 extrema = f"Min {stats.minimum:.0f}  |  Max {stats.maximum:.0f}%"
@@ -778,6 +825,10 @@ class HafApp(tk.Tk):
                 )
             elif metric_mode in (TEMPERATURE_MODE, GPU_TEMPERATURE_MODE):
                 self.metric_range_vars[metric_mode].set(f"Min {stats.current:.0f}  |  Max {stats.current:.0f} °C")
+            elif metric_mode == CPU_FAN_MODE:
+                self.metric_range_vars[metric_mode].set(
+                    f"Min {stats.current:.0f}  |  Max {stats.current:.0f} RPM"
+                )
             else:
                 self.metric_range_vars[metric_mode].set(f"Min {stats.current:.0f}  |  Max {stats.current:.0f}%")
         self._append_activity("Dashboard session min/max reset to current readings")
@@ -789,6 +840,23 @@ class HafApp(tk.Tk):
         else:
             self._stop_display_cycle()
 
+    def _selected_cycle_modes(self) -> tuple[str, ...]:
+        """Return enabled slots in their visible order; Off slots disappear."""
+        return tuple(
+            variable.get() for variable in self.cycle_slot_vars
+            if variable.get() in LIVE_MODES
+        )
+
+    def _cycle_slots_changed(self, _event=None) -> None:
+        """Apply edited ordering immediately without starting cycling itself."""
+        modes = self._selected_cycle_modes()
+        self.settings.cycle_modes = modes
+        self._append_activity(
+            "DISPLAY ORDER: " + (" -> ".join(modes) if modes else "no displays selected")
+        )
+        if self.lhm_live_running and self.cycle_enabled.get():
+            self._start_display_cycle()
+
     def _start_display_cycle(self) -> None:
         if not self.lhm_live_running or not self.cycle_enabled.get():
             self.cycle_status.set("Cycle off")
@@ -798,8 +866,13 @@ class HafApp(tk.Tk):
         except (TypeError, ValueError, tk.TclError):
             seconds = 15
             self.cycle_seconds.set(seconds)
-        active = self.lhm_live_mode or FREQUENCY_MODE
-        self._display_cycle = DisplayCycle(self.settings.cycle_modes, seconds, active)
+        modes = self._selected_cycle_modes()
+        if not modes:
+            self._stop_display_cycle()
+            self._append_activity("DISPLAY CYCLE not started; all display-order slots are Off")
+            return
+        active = self.lhm_live_mode or modes[0]
+        self._display_cycle = DisplayCycle(modes, seconds, active)
         self.lhm_live_mode = self._display_cycle.active
         self.mode.set(self._display_cycle.active)
         self._schedule_cycle_tick()
@@ -843,7 +916,11 @@ class HafApp(tk.Tk):
             except (TypeError, ValueError, tk.TclError):
                 seconds = 15
             active = self.lhm_live_mode or self.mode.get()
-            manual_cycle = DisplayCycle(self.settings.cycle_modes, seconds, active)
+            modes = self._selected_cycle_modes()
+            if not modes:
+                self._append_activity("DISPLAY NEXT ignored; all display-order slots are Off")
+                return
+            manual_cycle = DisplayCycle(modes, seconds, active)
             self._select_cycle_mode(manual_cycle.next(), "manual-next")
             # Manual navigation must not silently enable the automatic timer.
             self.cycle_status.set("Cycle off")
@@ -1046,7 +1123,6 @@ class HafApp(tk.Tk):
         self.lcd_off_button.configure(
             state="normal" if can_use and self._lcd_power_state == "awake" else "disabled"
         )
-
     def _gentle_power_off(self) -> None:
         if self._power_transition_running:
             return
@@ -1211,6 +1287,7 @@ class HafApp(tk.Tk):
             self.cycle_seconds.set(seconds)
             self.settings.cycle_enabled = self.cycle_enabled.get()
             self.settings.cycle_seconds = seconds
+            self.settings.cycle_modes = self._selected_cycle_modes()
             self.settings.start_minimized = self.start_minimized.get()
             self.settings.auto_connect = self.auto_connect.get()
             self.settings.auto_start_lhm = self.auto_start_lhm.get()
@@ -1224,9 +1301,11 @@ class HafApp(tk.Tk):
             self.settings.start_with_windows = startup_is_enabled(Path(__file__))
             self.start_with_windows.set(self.settings.start_with_windows)
             self.settings.save(self.settings_path)
+            cycle_order = " -> ".join(self.settings.cycle_modes) or "all slots Off"
             self._append_activity(
                 "Preferences saved: "
                 f"cycle={self.settings.cycle_enabled}/{seconds}s "
+                f"order={cycle_order}; "
                 f"startup={self.settings.start_with_windows} minimized={self.settings.start_minimized} "
                 f"auto_connect={self.settings.auto_connect} auto_lhm={self.settings.auto_start_lhm}"
             )

@@ -73,6 +73,11 @@ def select_memory_load(snapshot: dict) -> int:
     return _select_bounded(snapshot, "memory_load_percent", "Memory load", 0, 100)
 
 
+def select_cpu_fan_rpm(snapshot: dict) -> int:
+    """Return the explicitly selected or sole-active non-GPU fan speed."""
+    return _select_bounded(snapshot, "cpu_fan_rpm", "CPU fan", 0, 10000)
+
+
 def summarize_snapshot(snapshot: dict) -> dict[str, object]:
     sensors = snapshot.get("sensors", [])
 
