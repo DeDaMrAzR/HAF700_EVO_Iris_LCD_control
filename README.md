@@ -45,9 +45,8 @@ For a completely console-free launch, double-click `run_app.vbs`. `run_app.bat` 
 python .\app.py
 ```
 
-<img width="1452" height="965" alt="image" src="https://github.com/user-attachments/assets/6f316dbf-dfb1-427b-998d-6b434f7e81a5" />
+<img width="1446" height="958" alt="image" src="https://github.com/user-attachments/assets/31e23292-b16b-415d-88a1-551ef617c378" />
 
-<img width="1452" height="960" alt="image" src="https://github.com/user-attachments/assets/d0dedf8a-e8ce-4190-ad60-cc44916e0e4c" />
 
 Install the small GUI dependencies when needed with:
 
