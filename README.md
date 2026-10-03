@@ -150,6 +150,7 @@ The project is an unofficial community effort and is not affiliated with or
 endorsed by Cooler Master. Cooler Master, HAF, and related names and marks
 belong to their respective owners.
 
-The bundled V2/STW emblem artwork remains outside the MPL-2.0 grant and is
-subject to the good-faith, no-monetary-gain, and no-self-promotion conditions
-described in `ASSET_NOTICE.md`.
+The bundled [V2/STW emblem artwork](https://www.freestickers.net/Fairuse.html)
+remains outside the MPL-2.0 grant and is subject to the publisher's good-faith,
+no-monetary-gain, and no-self-promotion conditions described in
+`ASSET_NOTICE.md`.
