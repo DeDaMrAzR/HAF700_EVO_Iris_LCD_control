@@ -1,31 +1,46 @@
-# HAF 700 EVO Iris experimental controller
+# HAF 700 EVO Iris LCD Control
 
-Current version: **v0.0.3**
+Current release: **[v0.0.3](https://github.com/DeDaMrAzR/HAF700_EVO_Iris_LCD_control/releases/tag/v0.0.3)**
 
-Latest published release: **v0.0.3**
+An unofficial Windows controller for the Cooler Master HAF 700 EVO Iris LCD.
+It replaces the MasterPlus telemetry path while preserving the stock Android
+application and firmware.
 
-This is an experimental Windows GUI replacement for the Cooler Master HAF 700 EVO Iris display control path. It implements behavior recovered from the stock Android application and physically tested on the development unit:
+<img width="1446" height="958" alt="HAF 700 EVO Iris LCD Control v0.0.3" src="https://github.com/user-attachments/assets/31e23292-b16b-415d-88a1-551ef617c378" />
 
-- fixed ADB target `1234567890ABCDEF`;
-- temporary `localhost:18888 -> device:9900` forwarding;
-- automatic CPU/GPU frequency, CPU/GPU temperature, CPU/GPU usage, physical RAM usage, and CPU fan RPM modes;
-- extended manual 0-9,990 MHz CPU-frequency display tests using command `0x12` while retaining stock 1,100/6,000 MHz style bounds;
-- extended manual -20 to +150 C CPU-temperature tests using confirmed mode 3 and captured stock 40/80 style bounds;
-- physically validated manual controls for numeric renderer modes 2 and 4-13: GPU clock/temperature, CPU/GPU/RAM usage, CPU fan, and case fans 1-5;
-- a confirmation-gated reboot button that runs `adb -s 1234567890ABCDEF reboot` and removes the app's HAF-specific forward;
-- physically validated **LCD OFF** and **LCD ON** controls that use the stock shutdown/startup animations and preserve the running LHM helper;
-- `ON`/`OFF`/`UNKNOWN` power-state gating so only the valid next LCD power action is enabled;
-- bounded per-session JSONL logs under `logs/`;
-- a timestamped activity log on the right showing decoded transmitted fields, full TX frame hex, received ACK hex/match state, ADB forwarding, CPU sensor probes, and reboot results.
-- a read-only CPU sensor probe backed by the workspace-local LibreHardwareMonitor helper.
-- a live dashboard showing current/session-min/session-max values and bars for CPU/GPU frequency, CPU/GPU temperature, CPU/GPU usage, physical RAM usage, and CPU fan RPM;
-- eight ordered display slots, each selectable as any automatic metric or `Off`; timed cycling and manual **Next** share that visible sequence without additional per-mode polling;
-- JSON-backed window/startup preferences, optional per-user Windows logon registration, automatic fixed-device connection, and automatic LHM start;
-- optional notification-area operation provided by the declared `pystray` dependency.
+## Features
 
-On a fresh installation the application starts inert. Saved preferences can explicitly enable automatic connection and LHM startup on later launches. Disconnect and normal exit remove only the HAF-specific local forward. Reboot requires separate confirmation and targets only the fixed HAF serial. The application does not flash firmware, install/modify an APK, access NAND, start MasterPlus, or target another ADB serial.
+- Live dashboard with current, session-minimum, and session-maximum values.
+- Eight configurable display-order slots. Each slot can contain any live metric
+  or `Off`; timed cycling and **Next** use the same sequence.
+- Gentle **LCD OFF** and **LCD ON** controls using the stock shutdown and startup
+  animations, with power-state gating to prevent invalid actions.
+- Automatic connection and telemetry startup, optional Windows-logon startup,
+  start-minimized behavior, and notification-area operation.
+- Manual LCD values and physically validated numeric renderer modes 1–13 for
+  diagnostics and experimentation.
+- Confirmation-gated LCD-controller reboot and read-only LCD UI inspection.
+- Detailed bounded activity/JSONL logging with explicit sensor, frame, socket,
+  ADB, power-transition, and error records.
+- No firmware flashing, NAND access, APK replacement, or MasterPlus dependency.
 
-## Run
+### Live metrics
+
+| Display | Source |
+| --- | --- |
+| CPU frequency | LibreHardwareMonitor load-weighted physical-core clock |
+| GPU frequency | LibreHardwareMonitor GPU Core clock |
+| CPU temperature | LibreHardwareMonitor CPU Package |
+| GPU temperature | LibreHardwareMonitor GPU Core temperature |
+| CPU usage | LibreHardwareMonitor CPU Total |
+| GPU usage | LibreHardwareMonitor GPU Core load |
+| RAM usage | Windows physical-memory load |
+| CPU fan | LibreHardwareMonitor motherboard fan source |
+
+All dashboard values come from one persistent helper snapshot every two seconds.
+Changing the active display or cycle order does not start another sensor process.
+
+## Installation
 
 Requirements:
 
@@ -35,48 +50,77 @@ Requirements:
 - [Android SDK Platform-Tools for Windows](https://developer.android.com/tools/releases/platform-tools), with `adb.exe` available on `PATH`;
 - the Python packages listed in `requirements.txt`.
 
-The `v0.0.3` ZIP is a source/runtime package and does not bundle
-Python, .NET, or Android Platform-Tools. Install those prerequisites before
-launching the application.
+The release ZIP is a source/runtime package and does not bundle Python, .NET,
+or Android Platform-Tools.
 
-For a completely console-free launch, double-click `run_app.vbs`. `run_app.bat` also starts the GUI through `pythonw.exe`, although Windows may show the batch console for a fraction of a second. Use `run_app_debug.bat` only when a hidden startup error needs to be seen.
+1. Download and extract the ZIP from the
+   [latest release](https://github.com/DeDaMrAzR/HAF700_EVO_Iris_LCD_control/releases/latest).
+2. Install the Python dependencies from the extracted directory:
+
+   ```powershell
+   python -m pip install -r .\requirements.txt
+   ```
+
+3. Ensure `adb.exe` is available on `PATH` and the Iris controller appears in
+   `adb devices` as serial `1234567890ABCDEF`.
+4. Double-click `run_app.vbs` for a console-free launch.
+
+`run_app.bat` also starts through `pythonw.exe`, although its batch window may
+appear briefly. Use `run_app_debug.bat` only to diagnose a hidden startup error.
+The application can also be started directly:
 
 ```powershell
 python .\app.py
 ```
 
-<img width="1446" height="958" alt="image" src="https://github.com/user-attachments/assets/31e23292-b16b-415d-88a1-551ef617c378" />
+## First-run setup
 
-
-Install the small GUI dependencies when needed with:
-
-```powershell
-python -m pip install -r .\requirements.txt
-```
+On a fresh installation the application starts without automatically connecting.
+Connect to the LCD, start LHM telemetry, choose the required display order, and
+then save preferences. The saved options can subsequently connect to the LCD,
+start LHM, minimize to the notification area, and start with Windows.
 
 Preferences are stored in the generated `settings.json` (ignored by Git). **Start with Windows** writes only the current user's standard `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry and can be removed again from the same checkbox. It does not disable UAC. When enabled, **Connect to LCD on launch** still targets only `1234567890ABCDEF`; **Start LHM after connection** starts the normal helper path after that fixed connection succeeds.
 
 **Start LHM after connection** applies to every successful connection, including a later manual reconnect after the LCD finishes booting. Saving the option while already connected also schedules the helper immediately. The activity log records `AUTO LHM scheduled`, `starting`, `skipped`, or `canceled`, so startup behavior is not silent.
 
-## Current limitation
+## Display order and automatic cycling
 
-Manual values remain available. Live LHM `0x15` updates reuse one TCP connection for the live session, matching the physically successful persistent-socket test. The socket is opened lazily on the first live frame and is closed on Stop, disconnect, reboot, reconnect, application close, transport failure, or before an ACK-bearing persistent `0x12` command. Manual/persistent commands continue to use their isolated one-shot transaction and exact ACK validation.
+The eight numbered slots define both inclusion and order. Select a live metric
+in a slot or choose `Off` to exclude that position. Repeated metrics are allowed.
+When cycling is enabled, the timeout advances through this exact sequence.
+**Next** advances through the same sequence whether timed cycling is enabled or
+disabled. Changes apply during the current live session and are persisted by
+**Save preferences**.
 
-The LibreHardwareMonitor-backed helper is under `sensor_helper/`. The main Python/ADB process remains non-administrative; one-shot probes use a short-lived elevated helper and live mode uses one persistent elevated helper. Evidence is written under `logs/`.
+## Telemetry, elevation, and logs
 
-The **Start LHM live...** test uses one persistent elevated helper at a two-second cadence. It pairs P-core clocks with their two logical-thread load sensors and E-core clocks one-to-one, then sends the core-load-weighted clock as a non-persistent CPU-frequency update. The highest-loaded core and its clock remain logged as comparison evidence but are not transmitted. The compact JSONL evidence includes both candidates, total load, the encoded value, strategy name, and cumulative helper process CPU time. **Stop LHM**, disconnect, reboot, and window close create a stop sentinel; the helper exits after its current sampling interval. This remains a candidate-semantic test, not a finalized definition of whole-CPU frequency.
+The Python GUI and ADB controller remain non-administrative. LibreHardwareMonitor
+uses one persistent elevated .NET helper because low-level sensor access requires
+it. Depending on Windows UAC settings, starting telemetry may therefore display
+one elevation prompt.
 
-Live mode supports numeric modes 1-8. CPU frequency uses the load-weighted physical-core clock; GPU frequency, temperature, and usage use LHM `GPU Core`; CPU temperature uses CPU Package; CPU usage uses CPU Total; RAM usage uses Windows `GlobalMemoryStatusEx.dwMemoryLoad` for cheap physical-memory load. CPU fan uses a CPU-labelled motherboard channel when available, otherwise the sole active non-GPU fan; the activity log records the exact chosen hardware, sensor name, and identifier. The native RAM counter is intentional: enabling LHM's complete Memory group also walks DIMM/SPD data and made a compact test exceed 30 seconds. One helper snapshot contains every value and updates every dashboard card. Optional cycling changes only the value encoded from the next complete snapshot, so it adds no per-mode process or poll.
+Live updates reuse one TCP connection and one two-second sensor snapshot. Stop,
+disconnect, reboot, transport failure, and application exit close the connection
+and stop the helper cleanly. CPU fan selection prefers a motherboard fan labelled
+as CPU; if labels are generic, it uses a fallback only when exactly one non-GPU
+fan is active. The exact selected source is recorded in the activity log.
 
-Completed live-helper scratch logs are removed after a clean stop because the application session JSONL already records the compact reading and transmitted frame. Cleanup exists on both sides: Python handles normal Stop/Exit, and the helper removes its own scratch files after an owner-death shutdown. The main session logger rotates at 5 MiB and keeps two older segments, bounding one continuously running session to roughly 15 MiB without splitting JSON records. **Clean old logs...** previews a retention action, asks for confirmation, protects the active files, and keeps the newest 10 sessions, 5 helper streams, and 5 one-shot probes. New helpers also receive the GUI owner PID and exit automatically if that GUI disappears.
+Session JSONL logs are stored under `logs/`, rotate at 5 MiB, and retain two
+older segments. **Clean old logs...** previews its retention action and asks for
+confirmation before removing old files.
 
-After stopping live updates, **Read LCD UI** performs a read-only `uiautomator` hierarchy dump from only the fixed HAF serial. It reads the active frequency `TextView` and compares it with the latest expected value using the APK's two-decimal rounding. This takes about four seconds and verifies Android view-tree state, not guaranteed physical panel scanout; it is therefore deliberately unavailable while either live source is running.
+## Known limitations
 
-The same probe also samples Windows `Processor Information(_Total)` counters. It records nominal frequency, processor performance, processor utility, processor time, an active-frequency estimate, and a throughput-equivalent diagnostic (`nominal MHz * utility / 100`). The throughput-equivalent value is not a measured clock and cannot be forwarded to the LCD.
-
-## Important device limitation
-
-This build intentionally targets only ADB serial `1234567890ABCDEF`, the development HAF Iris unit. Change and revalidate `TARGET_SERIAL` in `haf_device.py` before attempting to use another unit. It never falls back to the first attached ADB device.
+- This release intentionally targets only ADB serial `1234567890ABCDEF` and
+  never falls back to another attached Android device. Supporting configurable
+  device selection requires separate validation.
+- Motherboard fan labels are vendor-specific. Check the logged sensor identity
+  if CPU fan is unavailable or does not match the expected header.
+- Successful transmission proves that a frame reached the Android socket, not
+  that the physical panel presented every intermediate frame.
+- **Read LCD UI** is a slow read-only diagnostic of the Android view tree, not
+  physical framebuffer acknowledgement, and is unavailable during live updates.
 
 ## Source, protocol, and licensing
 
