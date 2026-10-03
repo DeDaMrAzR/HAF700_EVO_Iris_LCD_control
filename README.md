@@ -4,7 +4,7 @@ Current release: **[v0.0.3](https://github.com/DeDaMrAzR/HAF700_EVO_Iris_LCD_con
 
 An unofficial Windows controller for the Cooler Master HAF 700 EVO Iris LCD.
 It replaces the MasterPlus telemetry path while preserving the stock Android
-application and firmware.
+application and firmware in the LCD module. 
 
 <img width="1446" height="958" alt="HAF 700 EVO Iris LCD Control v0.0.3" src="https://github.com/user-attachments/assets/31e23292-b16b-415d-88a1-551ef617c378" />
 
@@ -19,10 +19,10 @@ application and firmware.
   start-minimized behavior, and notification-area operation.
 - Manual LCD values and physically validated numeric renderer modes 1–13 for
   diagnostics and experimentation.
-- Confirmation-gated LCD-controller reboot and read-only LCD UI inspection.
+- Confirmation-gated LCD-controller reboot (if ADB is available) and read-only LCD UI inspection.
 - Detailed bounded activity/JSONL logging with explicit sensor, frame, socket,
   ADB, power-transition, and error records.
-- No firmware flashing, NAND access, APK replacement, or MasterPlus dependency.
+- No firmware flashing, NAND access, APK replacement or MasterPlus dependency.
 
 ### Live metrics
 
@@ -37,7 +37,7 @@ application and firmware.
 | RAM usage | Windows physical-memory load |
 | CPU fan | LibreHardwareMonitor motherboard fan source |
 
-All dashboard values come from one persistent helper snapshot every two seconds.
+All dashboard values come from one persistent helper snapshot every two seconds (LCD limitation).
 Changing the active display or cycle order does not start another sensor process.
 
 ## Installation
@@ -75,12 +75,12 @@ python .\app.py
 
 ## First-run setup
 
-On a fresh installation the application starts without automatically connecting.
+On a first run the application starts without automatically connecting.
 Connect to the LCD, start LHM telemetry, choose the required display order, and
 then save preferences. The saved options can subsequently connect to the LCD,
 start LHM, minimize to the notification area, and start with Windows.
 
-Preferences are stored in the generated `settings.json` (ignored by Git). **Start with Windows** writes only the current user's standard `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry and can be removed again from the same checkbox. It does not disable UAC. When enabled, **Connect to LCD on launch** still targets only `1234567890ABCDEF`; **Start LHM after connection** starts the normal helper path after that fixed connection succeeds.
+Preferences are stored in the generated `settings.json`. **Start with Windows** writes only the current user's standard `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` entry and can be removed again from the same checkbox. It does not disable UAC. When enabled, **Connect to LCD on launch** still targets only `1234567890ABCDEF`; **Start LHM after connection** starts the normal helper path after that fixed connection succeeds.
 
 **Start LHM after connection** applies to every successful connection, including a later manual reconnect after the LCD finishes booting. Saving the option while already connected also schedules the helper immediately. The activity log records `AUTO LHM scheduled`, `starting`, `skipped`, or `canceled`, so startup behavior is not silent.
 
@@ -132,22 +132,6 @@ dotnet build .\sensor_helper\HafCpuSensors.csproj -c Release
 
 See `protocol.md` for the recovered wire protocol and evidence boundaries. Third-party licenses and credits are in `THIRD_PARTY_NOTICES.md` and `licenses/`.
 
-## Versioning and packaged releases
-
-`version.py` is the authoritative application version. The same version is
-shown in the application title bar and recorded in the sensor helper project.
-Release tags use the matching `vMAJOR.MINOR.PATCH` form, beginning with
-`v0.0.1`.
-
-The GitHub Actions workflow validates that the tag and source version match,
-builds the helper, checks the Python source, creates a versioned Windows x64
-ZIP, generates `SHA256SUMS.txt` for that ZIP, and attaches both files to the
-corresponding GitHub Release. Checksums belong to packaged release artifacts;
-the source repository does not maintain a per-file checksum manifest.
-
-Each tagged release requires a curated description at
-`.github/release-notes/vMAJOR.MINOR.PATCH.md`. CI publishes that file as the
-GitHub Release description rather than generating a generic pull-request list.
 
 ## License and project status
 
