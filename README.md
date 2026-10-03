@@ -1,6 +1,8 @@
 # HAF 700 EVO Iris experimental controller
 
-Current version: **v0.0.2**
+Current development version: **v0.0.3-dev**
+
+Latest published release: **v0.0.2**
 
 This is an experimental Windows GUI replacement for the Cooler Master HAF 700 EVO Iris display control path. It implements behavior recovered from the stock Android application and physically tested on the development unit:
 

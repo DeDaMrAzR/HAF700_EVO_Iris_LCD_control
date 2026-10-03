@@ -35,7 +35,7 @@ jobs:
         shell: pwsh
         run: |
           $version = python -c "from version import __version__; print(__version__)"
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+          if ($version -notmatch '^\d+\.\d+\.\d+(-dev)?$') {
             throw "version.py does not contain a semantic version: $version"
           }
 
@@ -46,6 +46,9 @@ jobs:
           }
 
           if ($env:GITHUB_REF -like 'refs/tags/*') {
+            if ($version.EndsWith('-dev')) {
+              throw "Development version $version cannot be published from a release tag"
+            }
             $expectedTag = "v$version"
             if ($env:GITHUB_REF_NAME -ne $expectedTag) {
               throw "Tag $env:GITHUB_REF_NAME does not match source version $expectedTag"
