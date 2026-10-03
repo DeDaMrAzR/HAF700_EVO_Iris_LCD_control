@@ -48,7 +48,7 @@ Requirements:
 - [Python 3 for Windows](https://www.python.org/downloads/windows/) with Tkinter;
 - [Microsoft .NET 8 Runtime for Windows x64](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) for the included sensor helper;
 - [Android SDK Platform-Tools for Windows](https://developer.android.com/tools/releases/platform-tools), with `adb.exe` available on `PATH`;
-- the Python packages listed in `requirements.txt`.
+- the Python packages listed in [`requirements.txt`](requirements.txt).
 
 The release ZIP is a source/runtime package and does not bundle Python, .NET,
 or Android Platform-Tools.
@@ -124,27 +124,34 @@ confirmation before removing old files.
 
 ## Source, protocol, and licensing
 
-The Python application source and C# helper source are included. Rebuild the helper with:
+The Python application source and C# helper source are included. Rebuild the
+helper from [`sensor_helper/HafCpuSensors.csproj`](sensor_helper/HafCpuSensors.csproj):
 
 ```powershell
 dotnet build .\sensor_helper\HafCpuSensors.csproj -c Release
 ```
 
-See `protocol.md` for the recovered wire protocol and evidence boundaries. Third-party licenses and credits are in `THIRD_PARTY_NOTICES.md` and `licenses/`.
+See [`protocol.md`](protocol.md) for the recovered wire protocol and evidence
+boundaries. Third-party licenses and credits are in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and the
+[`licenses/`](licenses/) directory.
 
 
 ## Licence and credits
 
 The original Python, C#, PowerShell, and launcher source in this project is
-licensed under the Mozilla Public License 2.0. See `LICENSE`. Third-party
-components retain their own licenses and notices.
+licensed under the Mozilla Public License 2.0. See the project
+[`LICENSE`](LICENSE) file for the complete text. Third-party components retain
+their own licenses and notices.
 
 Hardware telemetry is provided through `LibreHardwareMonitorLib` from the
 [Libre Hardware Monitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
 open-source project. Credit and thanks go to its maintainers and contributors
 for the hardware-monitoring library that makes the live sensor integration
 possible. Libre Hardware Monitor remains under its own license; the applicable
-notice and license text are included in `THIRD_PARTY_NOTICES.md` and `licenses/`.
+notice and license text are included in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and
+[`licenses/`](licenses/).
 
 The project is an unofficial community effort and is not affiliated with or
 endorsed by Cooler Master. Cooler Master, HAF, and related names and marks
@@ -153,4 +160,4 @@ belong to their respective owners.
 The bundled [V2/STW emblem artwork](https://www.freestickers.net/Fairuse.html)
 remains outside the MPL-2.0 grant and is subject to the publisher's good-faith,
 no-monetary-gain, and no-self-promotion conditions described in
-`ASSET_NOTICE.md`.
+[`ASSET_NOTICE.md`](ASSET_NOTICE.md).
