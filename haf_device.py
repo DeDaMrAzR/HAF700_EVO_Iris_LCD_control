@@ -16,7 +16,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
-from haf_protocol import EXPECTED_ACK
+from adb_shell import has_forward
+from haf_protocol import EXPECTED_ACK, build_provisional_metric_frame
 
 TARGET_SERIAL = "1234567890ABCDEF"
 LOCAL_PORT = 18888
@@ -27,6 +28,11 @@ STOCK_ACTIVITY = "com.magic.box/.ui.SplashActivity"
 SHUTDOWN_WAIT_SECONDS = 35.0
 WAKE_STABILIZATION_SECONDS = 3.0
 STARTUP_WAIT_SECONDS = 30.0
+RING_RESET_INTERVAL_SECONDS = 600.0
+RING_RESET_FRAME = build_provisional_metric_frame(5, 25, persist=False)
+USAGE_GAUGE_MODES = (5, 6, 7)
+ROTATING_MODES = (1, 2, 3, 4, 8, 9, 10, 11, 12, 13)
+ROUND_SPEED_OFFSET = 17
 
 
 def timestamp() -> str:
@@ -107,6 +113,7 @@ class HafDevice:
         self.connected = False
         self._live_socket: socket.socket | None = None
         self._live_socket_lock = threading.Lock()
+        self._last_ring_reset: float | None = None
 
     def _close_live_socket(self, reason: str) -> None:
         with self._live_socket_lock:
@@ -133,14 +140,31 @@ class HafDevice:
                     local_port=LOCAL_PORT,
                     device_port=DEVICE_PORT,
                 )
+            mode = None
+            if len(frame) == len(RING_RESET_FRAME) and frame[:6] == RING_RESET_FRAME[:6]:
+                mode = frame[6]
+            gauge_resets_ring = mode in USAGE_GAUGE_MODES and frame[ROUND_SPEED_OFFSET] == 0
+            elapsed = None if self._last_ring_reset is None else time.monotonic() - self._last_ring_reset
+            reset_due = mode in ROTATING_MODES and (elapsed is None or elapsed >= RING_RESET_INTERVAL_SECONDS)
+            # The stock usage gauge clears the shared dial angle. Follow it with
+            # the intended screen in the same write to minimize visible changes.
             try:
-                self._live_socket.sendall(frame)
+                self._live_socket.sendall(RING_RESET_FRAME + frame if reset_due else frame)
             except Exception:
                 try:
                     self._live_socket.close()
                 finally:
                     self._live_socket = None
                 raise
+            if reset_due or gauge_resets_ring:
+                self._last_ring_reset = time.monotonic()
+            if reset_due:
+                self.log.write(
+                    "ring_angle_reset",
+                    mode=mode,
+                    reason="first_rotating_update" if elapsed is None else "interval_elapsed",
+                    elapsed_seconds=None if elapsed is None else round(elapsed, 1),
+                )
 
     @staticmethod
     def _adb() -> str:
@@ -149,7 +173,7 @@ class HafDevice:
             raise RuntimeError("adb.exe was not found on PATH")
         return executable
 
-    def _run_adb(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def _run_adb(self, *arguments: str, timeout: float = 10.0) -> subprocess.CompletedProcess[str]:
         command = [self._adb(), "-s", TARGET_SERIAL, *arguments]
         # The normal GUI is launched with pythonw. Hide ADB's console window as
         # well so multi-step ON/OFF operations do not flash several shells.
@@ -157,7 +181,7 @@ class HafDevice:
             command,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=timeout,
             check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
@@ -172,7 +196,9 @@ class HafDevice:
         if result.returncode != 0:
             self.log.write("connect_failed", returncode=result.returncode, stderr=result.stderr.strip())
             raise RuntimeError(result.stderr.strip() or "ADB forward failed")
-        self.connected = True
+        with self._live_socket_lock:
+            self._last_ring_reset = None
+            self.connected = True
         self.log.write(
             "connected",
             serial=TARGET_SERIAL,
@@ -180,20 +206,29 @@ class HafDevice:
             device_port=DEVICE_PORT,
         )
 
-    def disconnect(self) -> None:
+    def forwarding_active(self) -> bool:
+        return has_forward(TARGET_SERIAL, LOCAL_PORT, DEVICE_PORT)
+
+    def disconnect(self, *, forward_gone: bool = False) -> None:
         self._close_live_socket("disconnect")
         if not self.connected:
             return
-        result = self._run_adb("forward", "--remove", f"tcp:{LOCAL_PORT}")
         self.connected = False
+        if forward_gone:
+            self.log.write("disconnected", serial=TARGET_SERIAL, returncode=0, forward_absent=True)
+            return
+        result = self._run_adb("forward", "--remove", f"tcp:{LOCAL_PORT}", timeout=2.0)
+        stderr = result.stderr.strip()
+        forward_absent = stderr.endswith(f"listener 'tcp:{LOCAL_PORT}' not found")
         self.log.write(
             "disconnected",
             serial=TARGET_SERIAL,
             returncode=result.returncode,
-            stderr=result.stderr.strip(),
+            stderr=stderr,
+            forward_absent=forward_absent,
         )
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "ADB forward removal failed")
+        if result.returncode != 0 and not forward_absent:
+            raise RuntimeError(stderr or "ADB forward removal failed")
 
     def reboot(self) -> None:
         """Remove this app's forward, then reboot only the fixed HAF serial."""
@@ -233,17 +268,26 @@ class HafDevice:
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"Android keyevent {keycode} failed")
 
-    def read_wakefulness(self) -> str:
-        """Return Android's current Awake/Asleep state for GUI gating."""
+    def read_power_state(self) -> tuple[str, int | None, bool]:
+        """Read Android wakefulness and the reported backlight level together."""
         result = self._run_adb("shell", "dumpsys", "power")
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or "Could not read Android power state")
-        for line in result.stdout.splitlines():
-            if "mWakefulness=" in line:
-                wakefulness = line.split("mWakefulness=", 1)[1].strip()
-                self.log.write("lcd_power_state_read", serial=TARGET_SERIAL, wakefulness=wakefulness)
-                return wakefulness
-        raise RuntimeError("Android power state did not contain mWakefulness")
+        fields = dict(line.strip().split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        wakefulness = fields.get("mWakefulness")
+        if not wakefulness:
+            raise RuntimeError("Android power state did not contain mWakefulness")
+        raw_backlight = fields.get("mActualBacklight", "").strip()
+        backlight = int(raw_backlight) if raw_backlight.isdecimal() else None
+        blanked = fields.get("mScreenBrightnessOverrideFromWindowManager", "").strip() == "0"
+        self.log.write(
+            "lcd_power_state_read", serial=TARGET_SERIAL, wakefulness=wakefulness,
+            backlight=backlight, window_blanked=blanked,
+        )
+        return wakefulness, backlight, blanked
+
+    def read_wakefulness(self) -> str:
+        return self.read_power_state()[0]
 
     def _stock_process_running(self) -> bool:
         result = self._run_adb("shell", "pidof", STOCK_PACKAGE)

@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
+import ctypes
+import sys
 import threading
 import tkinter as tk
-import sys
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -89,6 +90,11 @@ MODE_CONFIGS = {
 }
 class HafApp(tk.Tk):
     def __init__(self) -> None:
+        if sys.platform == "win32":
+            # Give the taskbar an application identity before Tk creates a window.
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "DeDaMrAzR.HAF700EVO.IrisLCDControl"
+            )
         super().__init__()
         self.title(f"HAF 700 EVO Iris Control v{__version__}")
         # Seven live cards and the evidence log fit comfortably on the 1080p
@@ -108,6 +114,7 @@ class HafApp(tk.Tk):
         self.connection_status = tk.StringVar(value="DISCONNECTED")
         self.sensor_status = tk.StringVar(value="Not sampled")
         self.connected_ui = False
+        self._connection_check_id: str | None = None
         self.lhm_live_running = False
         self._lhm_live_stop = threading.Event()
         self._lhm_stream: ElevatedFrequencyStream | None = None
@@ -150,6 +157,7 @@ class HafApp(tk.Tk):
         self._lcd_transmission_paused = threading.Event()
         self._power_resume_mode: str | None = None
         self._lcd_power_state: str | None = None
+        self._lcd_dark = False
         self.lcd_power_status = tk.StringVar(value="UNKNOWN")
         self._build_ui()
         self.status.trace_add("write", self._status_changed)
@@ -222,8 +230,15 @@ class HafApp(tk.Tk):
             )
         elif event == "live_socket_closed":
             lines.append(f"Persistent live socket closed ({record.get('reason')})")
+        elif event == "ring_angle_reset":
+            elapsed = record.get("elapsed_seconds")
+            timing = "first rotating update" if elapsed is None else f"after {elapsed}s"
+            lines.append(f"LCD ring reset sent for mode {record.get('mode')} ({timing})")
         elif event == "disconnected":
-            lines.append(f"ADB forward removed (exit {record.get('returncode')})")
+            if record.get("forward_absent"):
+                lines.append("ADB forward already absent")
+            else:
+                lines.append(f"ADB forward removal exit {record.get('returncode')}")
         elif event == "pre_reboot_forward_cleanup":
             lines.append(f"Pre-reboot forward cleanup exit {record.get('returncode')}")
         elif event == "reboot_requested":
@@ -260,12 +275,17 @@ class HafApp(tk.Tk):
             self.after(0, self._append_activity, line)
 
     def _set_icon(self) -> None:
-        ico_path = Path(__file__).parent / "haf_iris.ico"
-        icon_path = Path(__file__).parent / "avatar small.jpg"
-        try:
-            if ico_path.exists():
+        asset_directory = Path(__file__).parent
+        ico_path = asset_directory / "haf_iris.ico"
+        if sys.platform == "win32" and ico_path.is_file():
+            try:
                 self.iconbitmap(default=str(ico_path))
-            image = Image.open(icon_path)
+                self.iconbitmap(str(ico_path))
+                return
+            except tk.TclError:
+                pass
+        try:
+            image = Image.open(asset_directory / "avatar small.jpg")
             image.thumbnail((64, 64), Image.Resampling.LANCZOS)
             self._icon_image = ImageTk.PhotoImage(image)
             self.iconphoto(True, self._icon_image)
@@ -512,6 +532,11 @@ class HafApp(tk.Tk):
 
     def _set_connected_ui(self, connected: bool) -> None:
         self.connected_ui = connected
+        if self._connection_check_id is not None:
+            self.after_cancel(self._connection_check_id)
+            self._connection_check_id = None
+        if connected:
+            self._connection_check_id = self.after(2000, self._check_lcd_connection)
         self.connection_status.set("CONNECTED" if connected else "DISCONNECTED")
         self.connection_label.configure(
             style="Connected.Status.TLabel" if connected else "Disconnected.Status.TLabel"
@@ -520,6 +545,7 @@ class HafApp(tk.Tk):
         self.disconnect_button.configure(state="normal" if connected else "disabled")
         self.reboot_button.configure(state="normal" if connected else "disabled")
         if not connected:
+            self.last_expected_lcd = None
             self._update_lcd_power_state(None)
         else:
             self._refresh_power_button_states()
@@ -531,6 +557,29 @@ class HafApp(tk.Tk):
         if not connected:
             self._cancel_auto_lhm_start()
             self._stop_lhm_live("Live LHM test stopped because the LCD disconnected")
+
+    def _check_lcd_connection(self) -> None:
+        self._connection_check_id = None
+        if not self.connected_ui:
+            return
+        try:
+            if self.device.forwarding_active():
+                self._connection_check_id = self.after(2000, self._check_lcd_connection)
+                return
+        except (OSError, ValueError) as exc:
+            self._lcd_connection_lost(f"ADB unavailable: {exc}", forward_gone=True)
+        else:
+            self._lcd_connection_lost("ADB forward disappeared", forward_gone=True)
+
+    def _lcd_connection_lost(self, reason: str, *, forward_gone: bool = False) -> None:
+        if not self.connected_ui:
+            return
+        self._set_connected_ui(False)
+        try:
+            self.device.disconnect(forward_gone=forward_gone)
+        except Exception as exc:
+            self._append_activity(f"LCD connection cleanup failed: {exc}")
+        self.status.set(f"LCD connection lost: {reason}")
 
     def _start_lhm_live(self) -> None:
         if self.lhm_live_running:
@@ -548,7 +597,7 @@ class HafApp(tk.Tk):
             return
         self.lhm_live_mode = selected
         self.lhm_live_running = True
-        self._lhm_live_stop.clear()
+        self._lhm_live_stop = threading.Event()
         self._lhm_stream = ElevatedFrequencyStream()
         self.lhm_start_button.configure(state="disabled")
         self.lhm_stop_button.configure(state="normal")
@@ -560,7 +609,9 @@ class HafApp(tk.Tk):
         # load together. Cycling therefore changes only which value we encode;
         # it does not start another sensor process or add another poll.
         self._start_display_cycle()
-        threading.Thread(target=self._lhm_live_worker, daemon=True).start()
+        threading.Thread(
+            target=self._lhm_live_worker, args=(self._lhm_stream, self._lhm_live_stop), daemon=True,
+        ).start()
 
     def _stop_lhm_live(self, message: str = "Live LHM test stopped") -> None:
         was_running = self.lhm_live_running
@@ -581,17 +632,14 @@ class HafApp(tk.Tk):
             self.device.close_live_session("lhm_live_stop")
             self._append_activity(message)
 
-    def _lhm_live_worker(self) -> None:
-        stream = self._lhm_stream
+    def _lhm_live_worker(self, stream: ElevatedFrequencyStream, stop: threading.Event) -> None:
         previous_cpu_ms: float | None = None
         previous_sample_time: datetime | None = None
         try:
-            if stream is None:
-                raise RuntimeError("LHM frequency stream was not initialized")
             stream.start()
-            while not self._lhm_live_stop.is_set():
+            while not stop.is_set():
                 for sample in stream.read_new():
-                    if self._lhm_live_stop.is_set():
+                    if stop.is_set():
                         break
                     if not sample.get("is_elevated"):
                         raise RuntimeError("persistent LHM helper is not elevated")
@@ -748,9 +796,13 @@ class HafApp(tk.Tk):
                     # Disconnect/Stop can occur after this sample entered the
                     # loop. Recheck immediately before I/O so an expected user
                     # disconnect does not become a noisy transport error.
-                    if self._lhm_live_stop.is_set() or not self.connected_ui:
+                    if stop.is_set() or not self.connected_ui:
                         break
-                    self.device.send(frame, expect_ack=False)
+                    try:
+                        self.device.send(frame, expect_ack=False)
+                    except ConnectionError as exc:
+                        self.after(0, self._live_connection_lost, stream, str(exc))
+                        break
                     self.last_expected_lcd = expected
                     self.after(
                         0,
@@ -758,18 +810,24 @@ class HafApp(tk.Tk):
                         f"TX complete mode={live_mode} expected_LCD={expected} "
                         "app_acceptance=unverified physical_display=unverified",
                     )
-                self._lhm_live_stop.wait(0.5)
+                stop.wait(0.5)
         except Exception as exc:
             self.after(0, self._append_activity, f"LHM LIVE ERROR: {type(exc).__name__}: {exc}")
         finally:
-            if stream is not None:
-                try:
-                    stream.stop(8.0)
-                except Exception:
-                    pass
-            self.after(0, self._lhm_live_finished)
+            try:
+                stream.stop(8.0)
+            except Exception:
+                pass
+            self.after(0, self._lhm_live_finished, stream)
 
-    def _lhm_live_finished(self) -> None:
+    def _live_connection_lost(self, stream: ElevatedFrequencyStream, reason: str) -> None:
+        if stream is self._lhm_stream and not self._lhm_live_stop.is_set():
+            self._lcd_connection_lost(reason)
+
+    def _lhm_live_finished(self, stream: ElevatedFrequencyStream) -> None:
+        if stream is not self._lhm_stream:
+            return
+        self._lhm_stream = None
         self.lhm_live_running = False
         self.lhm_live_mode = None
         self._stop_display_cycle()
@@ -964,8 +1022,9 @@ class HafApp(tk.Tk):
     def _connect(self) -> None:
         try:
             self.device.connect()
+            state = self.device.read_power_state()
             self._set_connected_ui(True)
-            self._update_lcd_power_state(self.device.read_wakefulness())
+            self._update_lcd_power_state(*state)
             self.status.set(f"Connected to {TARGET_SERIAL} through localhost:18888")
             # This preference belongs to every successful connection, not just
             # the initial application-launch path. That matters when the LCD is
@@ -975,6 +1034,12 @@ class HafApp(tk.Tk):
             else:
                 self._append_activity("AUTO LHM skipped: preference is disabled")
         except Exception as exc:
+            if self.device.connected:
+                self._set_connected_ui(False)
+                try:
+                    self.device.disconnect()
+                except Exception as cleanup_error:
+                    self._append_activity(f"LCD connection cleanup failed: {cleanup_error}")
             self.status.set(f"Connection failed: {exc}")
             messagebox.showerror("Connection failed", str(exc))
 
@@ -985,6 +1050,8 @@ class HafApp(tk.Tk):
             return
         if self.lhm_live_running:
             self._append_activity(f"AUTO LHM skipped ({reason}): helper is already running")
+            return
+        if self._power_transition_running or self._lcd_power_state == "asleep" or self._lcd_dark:
             return
         self._cancel_auto_lhm_start()
         self._append_activity(f"AUTO LHM scheduled in 0.25s after {reason}")
@@ -1107,18 +1174,26 @@ class HafApp(tk.Tk):
         self.reboot_button.configure(state=state)
         self.apply_button.configure(state=state)
 
-    def _update_lcd_power_state(self, wakefulness: str | None) -> None:
+    def _update_lcd_power_state(
+        self, wakefulness: str | None, backlight: int | None = None, window_blanked: bool = False,
+    ) -> None:
         """Normalize Android power state and make the valid next action obvious."""
         normalized = wakefulness.lower() if wakefulness else None
         self._lcd_power_state = normalized if normalized in ("awake", "asleep") else None
-        label = "ON" if self._lcd_power_state == "awake" else "OFF" if self._lcd_power_state == "asleep" else "UNKNOWN"
+        self._lcd_dark = backlight == 0 or window_blanked
+        if self._lcd_power_state == "asleep":
+            label = "OFF"
+        elif self._lcd_power_state == "awake":
+            label = "BLANK" if self._lcd_dark else "AWAKE" if backlight is None else "ON"
+        else:
+            label = "UNKNOWN"
         self.lcd_power_status.set(label)
         self._refresh_power_button_states()
 
     def _refresh_power_button_states(self) -> None:
         can_use = self.connected_ui and not self._power_transition_running
         self.lcd_on_button.configure(
-            state="normal" if can_use and self._lcd_power_state == "asleep" else "disabled"
+            state="normal" if can_use and (self._lcd_power_state == "asleep" or self._lcd_dark) else "disabled"
         )
         self.lcd_off_button.configure(
             state="normal" if can_use and self._lcd_power_state == "awake" else "disabled"
@@ -1184,12 +1259,13 @@ class HafApp(tk.Tk):
 
     def _gentle_power_on_worker(self) -> None:
         try:
-            wakefulness = self.device.gentle_power_on()
-            self.after(0, self._gentle_power_on_finished, wakefulness, None)
+            self.device.gentle_power_on()
+            state = self.device.read_power_state()
+            self.after(0, self._gentle_power_on_finished, state, None)
         except Exception as exc:
             self.after(0, self._gentle_power_on_finished, None, exc)
 
-    def _gentle_power_on_finished(self, wakefulness: str | None, error: Exception | None) -> None:
+    def _gentle_power_on_finished(self, state: tuple[str, int | None, bool] | None, error: Exception | None) -> None:
         if error is not None:
             self.status.set(f"LCD ON failed: {error}")
             self._append_activity(f"LCD ON ERROR: {type(error).__name__}: {error}")
@@ -1203,14 +1279,14 @@ class HafApp(tk.Tk):
         self._lcd_transmission_paused.clear()
         if self.lhm_live_running and self.cycle_enabled.get():
             self._start_display_cycle()
-        self._update_lcd_power_state(wakefulness)
+        self._update_lcd_power_state(*state)
         self._set_power_transition_ui(False)
         if self.lhm_live_running:
             self.status.set("LCD ON complete; startup animation ended and live TX resumed")
         else:
             self.status.set("LCD ON complete; startup animation ended and the LCD is ready")
         self._append_activity(
-            f"LCD ON COMPLETE: wakefulness={wakefulness}; restored_mode={self._power_resume_mode}; "
+            f"LCD ON COMPLETE: wakefulness={state[0]}; restored_mode={self._power_resume_mode}; "
             f"TX={'resumed' if self.lhm_live_running else 'idle'}"
         )
 
@@ -1276,6 +1352,8 @@ class HafApp(tk.Tk):
             displayed = f"{value / 1000:.2f} GHz" if unit == "MHz" else f"{value} {unit}"
             self.last_expected_lcd = self._format_expected_frequency(value) if unit == "MHz" else str(value)
             self.status.set(f"ACK confirmed; LCD {selected} persisted at {displayed}")
+        except ConnectionError as exc:
+            self._lcd_connection_lost(str(exc))
         except Exception as exc:
             self.status.set(f"Apply failed: {exc}")
             messagebox.showerror("Apply failed", str(exc))
@@ -1396,6 +1474,9 @@ class HafApp(tk.Tk):
 
     def _exit_application(self) -> None:
         self._exiting = True
+        if self._connection_check_id is not None:
+            self.after_cancel(self._connection_check_id)
+            self._connection_check_id = None
         self._cancel_auto_lhm_start()
         self._stop_lhm_live()
         try:
